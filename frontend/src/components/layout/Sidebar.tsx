@@ -7,27 +7,32 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { usePermissions } from '../../hooks/usePermissions';
 
+
 const NAV_CONFIG = {
   RH: [
-    //{ label: 'Dashboard',     icon: GitBranch, path: '/admin' },
-    //{ label: 'Pipeline',      icon: GitBranch, path: '/pipeline' },
+    { label: 'Pipeline',      icon: GitBranch, path: '/pipeline' },
     { label: 'Job Offers',    icon: Briefcase, path: '/job-offers' },
     { label: 'Time Tracking', icon: Clock,     path: '/time-tracking' },
     { label: 'Invoicing',     icon: FileText,  path: '/invoicing' },
     { label: 'Employees',     icon: Users,     path: '/allemployees' },
-    { label: 'Admin Dashboard',         icon: Shield,    path: '/admin' },
+    { label: 'Payroll',         icon: FileText,  path: '/payroll' },
+    { label: 'Admin Dashboard', icon: Shield,    path: '/admin' },
   ],
   EMPLOYE: [
     { label: 'My Dashboard',  icon: GitBranch, path: '/employe' },
-    //{ label: 'Time Tracking', icon: Clock,     path: '/employe/time' },
+    //{ label: 'My Timesheets',  icon: Clock,     path: '/employe/time-tracking' },
+    { label: 'Mes Fiches',      icon: FileText, path: '/employe/factures' },
     { label: 'My Profile',    icon: Users,     path: '/employe/profile' },
+
   ],
   CANDIDAT: [
-    { label: 'Job Offers',    icon: Briefcase, path: '/candidat/offres' },
-    { label: 'My Applications', icon: FileText, path: '/candidat/mes-candidatures' },
-    { label: 'My Profile',    icon: Users,     path: '/candidat/profile' },
+    { label: 'Job Offers',      icon: Briefcase, path: '/candidat/offres' },
+    { label: 'Quiz',            icon: Briefcase, path: '/candidat/quizzes' }, 
+    { label: 'My Applications', icon: FileText,  path: '/candidat/mes-candidatures' },
+    { label: 'My Profile',      icon: Users,     path: '/candidat/profile' },
   ],
 };
+
 
 export default function Sidebar() {
   const navigate = useNavigate();

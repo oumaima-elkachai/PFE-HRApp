@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import api from '../../services/api';
-import { candidatsService } from '../../services/candidats';
 import { useAuth } from '../../context/AuthContext';
 
 interface Offre {

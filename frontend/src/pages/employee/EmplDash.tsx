@@ -1,5 +1,7 @@
+// src/pages/employee/EmplDash.tsx
 import { useState, useEffect } from 'react';
-import { Clock, FileText, Calendar, Download } from 'lucide-react';
+import { Clock, FileText, Calendar, Download, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { useAuth } from '../../context/AuthContext';
 import { pointagesService } from '../../services/pointages';
@@ -7,36 +9,61 @@ import { facturesService } from '../../services/factures';
 import { calendrierService } from '../../services/calendrier';
 
 export default function EmployeeDashboard() {
-  const { user }                          = useAuth();
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const [pointageActif, setPointageActif] = useState(false);
-  const [heureArrivee, setHeureArrivee]   = useState<string | null>(null);
-  const [factures, setFactures]           = useState<any[]>([]);
-  const [evenements, setEvenements]       = useState<any[]>([]);
-  const [loading, setLoading]             = useState(true);
-  const [ptLoading, setPtLoading]         = useState(false);
-  const [flash, setFlash]                 = useState('');
+  const [heureArrivee, setHeureArrivee] = useState<string | null>(null);
+  const [factures, setFactures] = useState<any[]>([]);
+  const [evenements, setEvenements] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [ptLoading, setPtLoading] = useState(false);
+  const [flash, setFlash] = useState('');
 
   useEffect(() => {
     const charger = async () => {
       try {
         const today = new Date().toISOString().split('T')[0];
+        
+        console.log('🔍 Chargement données pour employé:', user?.id);
+        
         const [facRes, evRes, ptRes] = await Promise.all([
           facturesService.lister() as any,
           calendrierService.lister() as any,
           pointagesService.historique({ date: today }) as any,
         ]);
-        setFactures((facRes?.data?.factures ?? []).slice(0, 5));
+
+        console.log('📊 Réponse factures:', facRes);
+        
+        const allFactures = facRes?.data?.factures ?? [];
+        console.log(`✅ Total factures reçues: ${allFactures.length}`);
+        
+        // ✅ Le backend devrait déjà avoir filtré, mais on vérifie par sécurité
+        const mesFactures = allFactures.filter((f: any) => {
+          const match = f.employeId === user?.id || f.employeId === user?.sub;
+          if (match) {
+            console.log(`✅ Facture ${f.numero} correspond à l'employé`);
+          }
+          return match;
+        });
+        
+        console.log(`✅ Factures filtrées pour cet employé: ${mesFactures.length}`);
+        
+        setFactures(mesFactures.slice(0, 5));
         setEvenements((evRes?.data?.evenements ?? []).slice(0, 3));
+        
         const enCours = (ptRes?.data?.pointages ?? []).find((p: any) => p.statut === 'EN_COURS');
         if (enCours) {
           setPointageActif(true);
           setHeureArrivee(new Date(enCours.heureArrivee).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
         }
-      } catch (e) { console.error(e); }
-      finally { setLoading(false); }
+      } catch (e) {
+        console.error('❌ Erreur chargement:', e);
+      } finally {
+        setLoading(false);
+      }
     };
     charger();
-  }, []);
+  }, [user?.id, user?.sub]);
 
   const handlePointage = async () => {
     setPtLoading(true);
@@ -56,7 +83,9 @@ export default function EmployeeDashboard() {
     } catch (e: any) {
       setFlash('❌ ' + (e?.erreur || 'Erreur pointage'));
       setTimeout(() => setFlash(''), 4000);
-    } finally { setPtLoading(false); }
+    } finally {
+      setPtLoading(false);
+    }
   };
 
   const greeting = new Date().getHours() < 12 ? 'Bonjour' : new Date().getHours() < 18 ? 'Bon après-midi' : 'Bonsoir';
@@ -64,9 +93,10 @@ export default function EmployeeDashboard() {
   return (
     <Layout>
       <div className="max-w-5xl">
-
         {flash && (
-          <div className="fixed top-20 right-6 z-50 bg-[#2d6a4f] text-white px-4 py-3 rounded-xl shadow-lg text-sm">{flash}</div>
+          <div className="fixed top-20 right-6 z-50 bg-[#2d6a4f] text-white px-4 py-3 rounded-xl shadow-lg text-sm">
+            {flash}
+          </div>
         )}
 
         {/* Header + pointage */}
@@ -96,7 +126,9 @@ export default function EmployeeDashboard() {
                 pointageActif ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-[#2d6a4f] hover:bg-[#1b4332] text-white'
               }`}
             >
-              {ptLoading ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : (
+              {ptLoading ? (
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
                 <Clock className="w-4 h-4" />
               )}
               {pointageActif ? 'Pointer départ' : 'Pointer arrivée'}
@@ -112,15 +144,18 @@ export default function EmployeeDashboard() {
             { icon: '🏢', label: 'Mon département', value: user?.departement || '—', color: 'bg-amber-50', text: true },
           ].map((s, i) => (
             <div key={i} className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
-              <div className={`w-11 h-11 ${s.color} rounded-xl flex items-center justify-center text-xl mb-3`}>{s.icon}</div>
+              <div className={`w-11 h-11 ${s.color} rounded-xl flex items-center justify-center text-xl mb-3`}>
+                {s.icon}
+              </div>
               <div className="text-xs font-semibold text-[#9ca3af] uppercase tracking-wide mb-1">{s.label}</div>
-              <div className={`font-bold ${s.text ? 'text-base text-[#1a1a1a]' : 'text-3xl text-[#1a1a1a]'}`}>{s.value}</div>
+              <div className={`font-bold ${s.text ? 'text-base text-[#1a1a1a]' : 'text-3xl text-[#1a1a1a]'}`}>
+                {s.value}
+              </div>
             </div>
           ))}
         </div>
 
         <div className="grid grid-cols-2 gap-5">
-
           {/* Fiches de paie */}
           <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
             <div className="flex items-center justify-between mb-4">
@@ -128,13 +163,30 @@ export default function EmployeeDashboard() {
                 <FileText className="w-4 h-4 text-[#2d6a4f]" />
                 Mes fiches de paie
               </h2>
+              {factures.length > 0 && (
+                <button
+                  onClick={() => navigate('/employe/payslips')}
+                  className="flex items-center gap-1 text-xs font-medium text-[#2d6a4f] hover:underline"
+                >
+                  Voir tout
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
             {loading ? (
               <div className="space-y-3">
-                {[1,2,3].map(i => <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />)}
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />
+                ))}
               </div>
             ) : factures.length === 0 ? (
-              <div className="text-center py-8 text-sm text-[#9ca3af]">Aucune fiche de paie disponible</div>
+              <div className="text-center py-8">
+                <div className="text-4xl mb-2">📄</div>
+                <p className="text-sm text-[#9ca3af]">Aucune fiche de paie disponible</p>
+                <p className="text-xs text-[#9ca3af] mt-1">
+                  Vos bulletins de salaire apparaîtront ici
+                </p>
+              </div>
             ) : (
               <div className="space-y-3">
                 {factures.map((f: any) => (
@@ -144,7 +196,9 @@ export default function EmployeeDashboard() {
                       <div className="text-xs text-[#9ca3af] font-mono">{f.numero}</div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-[#2d6a4f] text-sm">{f.salaireNet?.toFixed(0)} TND</span>
+                      <span className="font-bold text-[#2d6a4f] text-sm">
+                        {f.salaireNet?.toFixed(0)} TND
+                      </span>
                       {f.pdfBase64 && (
                         <button
                           onClick={() => {
@@ -166,7 +220,7 @@ export default function EmployeeDashboard() {
             )}
           </div>
 
-          {/* Événements */}
+          {/* Événements (inchangé) */}
           <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
             <h2 className="font-bold text-[#1a1a1a] flex items-center gap-2 mb-4">
               <Calendar className="w-4 h-4 text-[#2d6a4f]" />
@@ -174,10 +228,14 @@ export default function EmployeeDashboard() {
             </h2>
             {loading ? (
               <div className="space-y-3">
-                {[1,2,3].map(i => <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />)}
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />
+                ))}
               </div>
             ) : evenements.length === 0 ? (
-              <div className="text-center py-8 text-sm text-[#9ca3af]">Aucun événement à venir</div>
+              <div className="text-center py-8 text-sm text-[#9ca3af]">
+                Aucun événement à venir
+              </div>
             ) : (
               <div className="space-y-3">
                 {evenements.map((ev: any) => (
@@ -186,7 +244,12 @@ export default function EmployeeDashboard() {
                     <div>
                       <div className="text-sm font-semibold text-[#1a1a1a]">{ev.titre}</div>
                       <div className="text-xs text-[#9ca3af]">
-                        {new Date(ev.dateDebut).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        {new Date(ev.dateDebut).toLocaleDateString('fr-FR', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
                       </div>
                     </div>
                   </div>

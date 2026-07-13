@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/LoginPage';
 import AdminDashboard from './pages/admin/DashboardPage';
-import EmployeesPage from './pages/employee/EmployeePage';
+import EmployeesPage from './pages/admin/EmployeesPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
 import InvoicingPage from './pages/admin/InvoicingPage';
 import TimeTrackingPage from './pages/admin/TimeTrackingPage';
@@ -15,6 +15,12 @@ import CalendarPage from './pages/admin/CalendarPage';
 import EmployeeProfilePage from './pages/employee/EmployeeProfile';
 import CandidatProfilePage from './pages/candidate/CandidatProfilePage';
 import EmployeeDashboard from './pages/employee/EmplDash';
+import QuizPage from './pages/candidate/QuizPage';
+import PipelinePage from './pages/admin/PipelinePage';
+import AssessmentsPage from './pages/candidate/AssessmentsPage';
+import PayslipsPage from './pages/employee/PayslipsPage';
+import PayrollManagementPage from './pages/employee/PayrollManagementPage';
+import MesFacturesPage from './pages/employee/MesFacturesPage';
 
 export default function App() {
   return (
@@ -85,6 +91,15 @@ export default function App() {
           }
         />
 
+        <Route
+          path="/pipeline"
+          element={
+            <ProtectedRoute allowedRoles={['RH']}>
+              <PipelinePage />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Routes Employé */}
         <Route
           path="/employe"
@@ -94,6 +109,24 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+       
+
+<Route
+  path="/payroll"
+  element={
+    <ProtectedRoute allowedRoles={['RH']}>
+      <PayrollManagementPage
+     />
+    </ProtectedRoute>
+  }
+/>
+
+<Route path="/employe/factures" element={
+  <ProtectedRoute allowedRoles={['EMPLOYE']}>
+    <MesFacturesPage />
+  </ProtectedRoute>
+} />
 
         {/* Routes Candidat */}
         <Route
@@ -121,6 +154,23 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        
+        <Route
+          path="/candidat/quizzes"
+          element={
+            <ProtectedRoute allowedRoles={['CANDIDAT']}>
+              <AssessmentsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/candidat/quiz/:quizId"
+          element={
+            <ProtectedRoute allowedRoles={['CANDIDAT']}>
+              <QuizPage />
+            </ProtectedRoute>
+          }
+        />
 
         
 <Route path="/candidat/offres" element={
@@ -129,6 +179,8 @@ export default function App() {
    <JobsPage/>
   </ProtectedRoute>
   } />
+
+
 
 
 <Route path="/candidat/mes-candidatures" element={

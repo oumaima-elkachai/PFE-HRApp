@@ -1,257 +1,242 @@
-// src/pages/employee/EmployeeDashboard.tsx
+// src/pages/employee/EmplDash.tsx
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, Briefcase, Eye, Clock, FileText } from 'lucide-react';
-import Layout from '@/components/layout/Layout';
-import Badge from '@/components/ui/Badge';
-import Avatar from '@/components/ui/Avatar';
-import { useAuth } from '@/context/AuthContext';
-import { employesService } from '@/services/employes';
-import type { Employe } from '@/types';
+import { Clock, FileText, Calendar, Download, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom'; // ✅ Ajouter
+import Layout from '../../components/layout/Layout';
+import { useAuth } from '../../context/AuthContext';
+import { pointagesService } from '../../services/pointages';
+import { facturesService } from '../../services/factures';
+import { calendrierService } from '../../services/calendrier';
 
-const DEPARTMENTS = ['All', 'Informatique', 'RH', 'Finance', 'Marketing', 'R&D'];
-
-export default function EmployeesPage() {
-  const navigate = useNavigate();
+export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const [employes, setEmployes] = useState<Employe[]>([]);
+  const navigate = useNavigate(); // ✅ Ajouter
+  const [pointageActif, setPointageActif] = useState(false);
+  const [heureArrivee, setHeureArrivee] = useState<string | null>(null);
+  const [factures, setFactures] = useState<any[]>([]);
+  const [evenements, setEvenements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [selectedDept, setSelectedDept] = useState('All');
+  const [ptLoading, setPtLoading] = useState(false);
+  const [flash, setFlash] = useState('');
 
-  // Charger les données
-  const charger = async () => {
+  useEffect(() => {
+    const charger = async () => {
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const [facRes, evRes, ptRes] = await Promise.all([
+          facturesService.lister() as any,
+          calendrierService.lister() as any,
+          pointagesService.historique({ date: today }) as any,
+        ]);
+        
+        // ✅ Filtrer les factures pour l'employé connecté
+        const allFactures = facRes?.data?.factures ?? [];
+        const mesFactures = allFactures.filter((f: any) => f.employeId === user?.id);
+        
+        setFactures(mesFactures.slice(0, 5));
+        setEvenements((evRes?.data?.evenements ?? []).slice(0, 3));
+        
+        const enCours = (ptRes?.data?.pointages ?? []).find((p: any) => p.statut === 'EN_COURS');
+        if (enCours) {
+          setPointageActif(true);
+          setHeureArrivee(new Date(enCours.heureArrivee).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    charger();
+  }, [user?.id]); // ✅ Ajouter user?.id comme dépendance
+
+  const handlePointage = async () => {
+    setPtLoading(true);
     try {
-      setLoading(true);
-      const res = await employesService.lister() as any;
-      const data: Employe[] = res?.data?.employes ?? res?.employes ?? [];
-      setEmployes(data.filter((e: Employe) => e.statut === 'actif'));
-    } catch (e) {
-      console.error('Erreur chargement employés:', e);
+      if (!pointageActif) {
+        await pointagesService.arrivee();
+        setPointageActif(true);
+        setHeureArrivee(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
+        setFlash('✅ Arrivée enregistrée !');
+      } else {
+        await pointagesService.depart();
+        setPointageActif(false);
+        setHeureArrivee(null);
+        setFlash('✅ Départ enregistré !');
+      }
+      setTimeout(() => setFlash(''), 4000);
+    } catch (e: any) {
+      setFlash('❌ ' + (e?.erreur || 'Erreur pointage'));
+      setTimeout(() => setFlash(''), 4000);
     } finally {
-      setLoading(false);
+      setPtLoading(false);
     }
   };
 
-  useEffect(() => {
-    charger();
-  }, []);
-
-  // Filtrer
-  const filtered = employes.filter(emp => {
-    const name = `${emp.prenom} ${emp.nom}`.toLowerCase();
-    const matchSearch = name.includes(search.toLowerCase()) || 
-      emp.poste?.toLowerCase().includes(search.toLowerCase());
-    const matchDept = selectedDept === 'All' || emp.departement === selectedDept;
-    return matchSearch && matchDept;
-  });
-
-  // Statistiques
-  const stats = {
-    total: filtered.length,
-    actifs: filtered.filter(e => e.statut === 'actif').length,
-    departments: [...new Set(employes.map(e => e.departement))].length,
-  };
-
-  const statusVariant = (s: string) => {
-    if (s === 'actif') return 'green' as const;
-    if (s === 'conge') return 'amber' as const;
-    return 'gray' as const;
-  };
-
-  const statusLabel = (s: string) => {
-    if (s === 'actif') return 'Active';
-    if (s === 'conge') return 'On Leave';
-    return 'Inactive';
-  };
+  const greeting = new Date().getHours() < 12 ? 'Bonjour' : new Date().getHours() < 18 ? 'Bon après-midi' : 'Bonsoir';
 
   return (
-    <Layout searchPlaceholder="Search employees...">
-      <div className="max-w-7xl">
-        
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-[#1a1a1a]">My Team</h1>
-          <p className="text-sm text-[#6b7280] mt-0.5">
-            {loading ? 'Loading...' : `${stats.actifs} active team members across ${stats.departments} departments`}
-          </p>
-        </div>
+    <Layout>
+      <div className="max-w-5xl">
+        {flash && (
+          <div className="fixed top-20 right-6 z-50 bg-[#2d6a4f] text-white px-4 py-3 rounded-xl shadow-lg text-sm">
+            {flash}
+          </div>
+        )}
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-[#d8f3dc] rounded-xl flex items-center justify-center">
-                <Briefcase className="w-5 h-5 text-[#2d6a4f]" />
-              </div>
-              <div>
-                <p className="text-xs text-[#9ca3af] font-medium">Total Employees</p>
-                <p className="text-2xl font-bold text-[#1a1a1a]">{stats.total}</p>
+        {/* Header + pointage */}
+        <div className="flex items-start justify-between mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-[#1a1a1a] mb-1">{greeting}, {user?.prenom} 👋</h1>
+            <p className="text-[#6b7280] text-sm">
+              {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </p>
+          </div>
+
+          {/* Carte pointage */}
+          <div className="bg-white border border-[#e5e0d8] rounded-2xl px-5 py-4 flex items-center gap-4 shadow-sm">
+            <div>
+              <div className="text-xs font-semibold text-[#9ca3af] uppercase tracking-wider mb-1">Statut</div>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${pointageActif ? 'bg-[#2d6a4f] animate-pulse' : 'bg-red-400'}`} />
+                <span className="text-sm font-medium text-[#1a1a1a]">
+                  {pointageActif ? `En service · ${heureArrivee}` : 'Hors service'}
+                </span>
               </div>
             </div>
-          </div>
-
-          <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-                <Clock className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-xs text-[#9ca3af] font-medium">Active Today</p>
-                <p className="text-2xl font-bold text-[#1a1a1a]">{stats.actifs}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
-                <FileText className="w-5 h-5 text-purple-600" />
-              </div>
-              <div>
-                <p className="text-xs text-[#9ca3af] font-medium">Departments</p>
-                <p className="text-2xl font-bold text-[#1a1a1a]">{stats.departments}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="flex items-center gap-3 mb-6 flex-wrap">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9ca3af]" />
-            <input
-              type="text"
-              placeholder="Search employees..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-[#e5e0d8] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2d6a4f]/30"
-            />
-          </div>
-          <div className="flex items-center gap-1 bg-white border border-[#e5e0d8] rounded-xl p-1">
-            {DEPARTMENTS.map(dept => (
-              <button
-                key={dept}
-                onClick={() => setSelectedDept(dept)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                  selectedDept === dept
-                    ? 'bg-[#2d6a4f] text-white'
-                    : 'text-[#6b7280] hover:text-[#374151]'
-                }`}
-              >
-                {dept}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="bg-white rounded-2xl border border-[#e5e0d8] overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[#f0ebe0] bg-[#fafaf8]">
-                <th className="text-left px-6 py-3 text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider">Employee</th>
-                <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider">Department</th>
-                <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider">Position</th>
-                <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider">Status</th>
-                <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider">Joined</th>
-                <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                // Loading skeleton
-                [...Array(5)].map((_, i) => (
-                  <tr key={i} className="border-b border-[#f0ebe0]">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-gray-100 rounded-full animate-pulse" />
-                        <div className="space-y-1.5">
-                          <div className="h-3 bg-gray-100 rounded w-28 animate-pulse" />
-                          <div className="h-2.5 bg-gray-100 rounded w-20 animate-pulse" />
-                        </div>
-                      </div>
-                    </td>
-                    {[1,2,3,4,5].map(j => (
-                      <td key={j} className="px-4 py-4">
-                        <div className="h-3 bg-gray-100 rounded w-20 animate-pulse" />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              ) : filtered.length === 0 ? (
-                // Empty state
-                <tr>
-                  <td colSpan={6} className="px-6 py-14 text-center">
-                    <div className="text-4xl mb-3">👥</div>
-                    <p className="text-sm text-[#6b7280]">
-                      {search ? `No results for "${search}"` : 'No employees found.'}
-                    </p>
-                  </td>
-                </tr>
+            <button
+              onClick={handlePointage}
+              disabled={ptLoading}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 ${
+                pointageActif ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-[#2d6a4f] hover:bg-[#1b4332] text-white'
+              }`}
+            >
+              {ptLoading ? (
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
               ) : (
-                // Data rows
-                filtered.map(emp => (
-                  <tr
-                    key={emp.id}
-                    className="border-b border-[#f0ebe0] last:border-0 hover:bg-[#fafaf8] transition-colors cursor-pointer"
-                    onClick={() => navigate(`/employe/colleagues/${emp.id}`)}
-                  >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <Avatar name={`${emp.prenom} ${emp.nom}`} />
-                        <div>
-                          <div className="font-semibold text-sm text-[#1a1a1a]">
-                            {emp.prenom} {emp.nom}
-                          </div>
-                          <div className="text-xs text-[#9ca3af]">{emp.email}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-1.5 text-sm text-[#374151]">
-                        <Briefcase className="w-3.5 h-3.5 text-[#9ca3af]" />
-                        {emp.departement}
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 text-sm text-[#374151]">
-                      {emp.poste}
-                    </td>
-                    <td className="px-4 py-4">
-                      <Badge variant={statusVariant(emp.statut)}>
-                        {statusLabel(emp.statut)}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-4 text-sm text-[#6b7280]">
-                      {new Date(emp.creeLe).toLocaleDateString('en-US', { 
-                        month: 'short', 
-                        day: 'numeric',
-                        year: 'numeric'
-                      })}
-                    </td>
-                    <td className="px-4 py-4" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => navigate(`/employe/colleagues/${emp.id}`)}
-                        className="flex items-center gap-1.5 text-xs text-[#2d6a4f] font-medium hover:underline"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        View
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                <Clock className="w-4 h-4" />
               )}
-            </tbody>
-          </table>
+              {pointageActif ? 'Pointer départ' : 'Pointer arrivée'}
+            </button>
+          </div>
+        </div>
 
-          {/* Footer */}
-          {!loading && filtered.length > 0 && (
-            <div className="px-6 py-3 border-t border-[#f0ebe0] bg-[#fafaf8]">
-              <span className="text-xs text-[#6b7280]">
-                Showing <strong>{filtered.length}</strong> of <strong>{employes.length}</strong> employees
-              </span>
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-4 mb-5">
+          {[
+            { icon: '📄', label: 'Fiches de paie', value: loading ? '...' : factures.length, color: 'bg-[#d8f3dc]' },
+            { icon: '📅', label: 'Événements ce mois', value: loading ? '...' : evenements.length, color: 'bg-blue-50' },
+            { icon: '🏢', label: 'Mon département', value: user?.departement || '—', color: 'bg-amber-50', text: true },
+          ].map((s, i) => (
+            <div key={i} className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
+              <div className={`w-11 h-11 ${s.color} rounded-xl flex items-center justify-center text-xl mb-3`}>
+                {s.icon}
+              </div>
+              <div className="text-xs font-semibold text-[#9ca3af] uppercase tracking-wide mb-1">{s.label}</div>
+              <div className={`font-bold ${s.text ? 'text-base text-[#1a1a1a]' : 'text-3xl text-[#1a1a1a]'}`}>
+                {s.value}
+              </div>
             </div>
-          )}
+          ))}
+        </div>
+
+        <div className="grid grid-cols-2 gap-5">
+          {/* Fiches de paie */}
+          <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-bold text-[#1a1a1a] flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#2d6a4f]" />
+                Mes fiches de paie
+              </h2>
+              {/* ✅ Bouton "Voir tout" */}
+              <button
+                onClick={() => navigate('/employe/payslips')}
+                className="flex items-center gap-1 text-xs font-medium text-[#2d6a4f] hover:underline"
+              >
+                Voir tout
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {loading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />
+                ))}
+              </div>
+            ) : factures.length === 0 ? (
+              <div className="text-center py-8 text-sm text-[#9ca3af]">
+                Aucune fiche de paie disponible
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {factures.map((f: any) => (
+                  <div key={f.id} className="flex items-center justify-between p-3 bg-[#f5f0e8] rounded-xl">
+                    <div>
+                      <div className="text-sm font-semibold text-[#1a1a1a]">{f.moisLabel}</div>
+                      <div className="text-xs text-[#9ca3af] font-mono">{f.numero}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-[#2d6a4f] text-sm">
+                        {f.salaireNet?.toFixed(0)} TND
+                      </span>
+                      {f.pdfBase64 && (
+                        <button
+                          onClick={() => {
+                            const link = document.createElement('a');
+                            link.href = `data:application/pdf;base64,${f.pdfBase64}`;
+                            link.download = `${f.numero}.pdf`;
+                            link.click();
+                          }}
+                          className="p-1.5 bg-white border border-[#e5e0d8] rounded-lg hover:bg-[#d8f3dc] transition-colors"
+                          title="Télécharger PDF"
+                        >
+                          <Download className="w-3.5 h-3.5 text-[#2d6a4f]" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Événements (inchangé) */}
+          <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
+            <h2 className="font-bold text-[#1a1a1a] flex items-center gap-2 mb-4">
+              <Calendar className="w-4 h-4 text-[#2d6a4f]" />
+              Prochains événements
+            </h2>
+            {loading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />
+                ))}
+              </div>
+            ) : evenements.length === 0 ? (
+              <div className="text-center py-8 text-sm text-[#9ca3af]">
+                Aucun événement à venir
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {evenements.map((ev: any) => (
+                  <div key={ev.id} className="flex items-start gap-3 p-3 bg-[#f5f0e8] rounded-xl">
+                    <div className="w-1 h-full min-h-8 bg-[#2d6a4f] rounded-full shrink-0" />
+                    <div>
+                      <div className="text-sm font-semibold text-[#1a1a1a]">{ev.titre}</div>
+                      <div className="text-xs text-[#9ca3af]">
+                        {new Date(ev.dateDebut).toLocaleDateString('fr-FR', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </Layout>

@@ -45,7 +45,7 @@ exports.handler = async (event) => {
     const facture = {
       id:            uuidv4(),
       numero:        `FACT-${annee}-${String(mois).padStart(2,"0")}-${uuidv4().slice(0,6).toUpperCase()}`,
-      employeId,
+       employeId: employe.id,
       employeNom:    `${employe.prenom} ${employe.nom}`,
       employePoste:  employe.poste,
       employeDept:   employe.departement,
