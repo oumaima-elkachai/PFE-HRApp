@@ -1,0 +1,7 @@
+{
+  "nom": "Admin",
+  "prenom": "RH",
+  "email": "rh@entreprise.tn",
+  "motDePasse": "admin123",
+  "role": "RH"
+}

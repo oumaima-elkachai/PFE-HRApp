@@ -1,0 +1,9 @@
+{
+  "nom": "Ben Ali",
+  "prenom": "Ahmed",
+  "email": "ahmed@entreprise.tn",
+  "motDePasse": "ahmed123",
+  "role": "EMPLOYE",
+  "departement": "Informatique",
+  "poste": "Developpeur"
+}
