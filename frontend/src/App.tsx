@@ -18,8 +18,8 @@ import EmployeeDashboard from './pages/employee/EmplDash';
 import QuizPage from './pages/candidate/QuizPage';
 import PipelinePage from './pages/admin/PipelinePage';
 import AssessmentsPage from './pages/candidate/AssessmentsPage';
-import PayslipsPage from './pages/employee/PayslipsPage';
 import PayrollManagementPage from './pages/employee/PayrollManagementPage';
+import HistoriquePointagePage from './pages/employee/HistoriquePointagePage';
 import MesFacturesPage from './pages/employee/MesFacturesPage';
 
 export default function App() {
@@ -109,6 +109,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        
 
        
 
@@ -125,6 +126,12 @@ export default function App() {
 <Route path="/employe/factures" element={
   <ProtectedRoute allowedRoles={['EMPLOYE']}>
     <MesFacturesPage />
+  </ProtectedRoute>
+} />
+
+<Route path="/employe/historique-pointage" element={
+  <ProtectedRoute allowedRoles={['EMPLOYE']}>
+    <HistoriquePointagePage />
   </ProtectedRoute>
 } />
 

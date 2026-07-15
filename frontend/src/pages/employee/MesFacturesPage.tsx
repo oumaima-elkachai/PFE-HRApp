@@ -21,6 +21,7 @@ interface Facture {
 
 const MOIS = ['','Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
+
 function StatCard({ icon: Icon, label, value, iconBg = 'bg-[#d8f3dc]', iconColor = 'text-[#2d6a4f]' }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;

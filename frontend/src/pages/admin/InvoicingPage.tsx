@@ -38,15 +38,24 @@ function StatusBadge({ status }: { status: 'Paid' | 'Pending' }) {
   );
 }
 
-// ── Modal Générer Facture ─────────────────────
 function ModalGenererFacture({ employes, onClose, onSuccess }: {
   employes: Employe[];
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [form, setForm]       = useState({ employeId: '', mois: new Date().getMonth() + 1, annee: new Date().getFullYear(), salaireBase: 2500 });
+  const [form, setForm] = useState({
+    employeId:     '',
+    mois:          new Date().getMonth() + 1,
+    annee:         new Date().getFullYear(),
+    tauxHoraire:   15,   // TND/heure
+    heuresContrat: 8,    // heures/jour
+  });
   const [loading, setLoading] = useState(false);
   const [erreur, setErreur]   = useState('');
+  const [preview, setPreview] = useState<any>(null);
+
+  const moisNoms = ['','Janvier','Février','Mars','Avril','Mai','Juin',
+                    'Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,79 +63,121 @@ function ModalGenererFacture({ employes, onClose, onSuccess }: {
     setLoading(true);
     setErreur('');
     try {
-      await facturesService.generer({
-        employeId:   form.employeId,
-        mois:        form.mois,
-        annee:       form.annee,
-        salaireBase: Number(form.salaireBase),
-        primes:      [],
-        deductions:  [{ libelle: 'CNSS', montant: Number(form.salaireBase) * 0.055 }],
-        heuresSupplementaires: 0,
-      });
+      const res = await facturesService.generer({
+        employeId:     form.employeId,
+        mois:          form.mois,
+        annee:         form.annee,
+        tauxHoraire:   Number(form.tauxHoraire),
+        heuresContrat: Number(form.heuresContrat),
+      }) as any;
+      setPreview(res?.data?.facture ?? null);
       onSuccess();
-      onClose();
+      if (!res?.data?.facture) onClose();
     } catch (err: any) {
-      setErreur(err?.erreur || 'Erreur génération facture');
-    } finally {
-      setLoading(false);
-    }
+      setErreur(err?.erreur || 'Erreur génération');
+    } finally { setLoading(false); }
   };
-
-  const moisNoms = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
         <div className="flex items-center justify-between p-6 border-b border-[#e5e0d8]">
-          <h2 className="font-serif text-lg font-semibold">Générer une fiche de paie</h2>
+          <h2 className="font-bold text-lg">Générer une fiche de paie</h2>
           <button onClick={onClose}><X className="w-5 h-5 text-[#6b7280]" /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {erreur && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">❌ {erreur}</div>}
 
-          <div>
-            <label className="text-xs font-medium text-gray-700 block mb-1">Employé *</label>
-            <select value={form.employeId} onChange={e => setForm({...form, employeId: e.target.value})}
-              className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]">
-              <option value="">Sélectionner...</option>
-              {employes.map(emp => (
-                <option key={emp.id} value={emp.id}>{emp.prenom} {emp.nom} — {emp.poste}</option>
+        {preview ? (
+          // Résumé après génération
+          <div className="p-6">
+            <div className="bg-[#d8f3dc] rounded-xl p-4 mb-4 text-center">
+              <div className="text-2xl font-black text-[#2d6a4f]">{preview.salaireNet?.toFixed(3)} TND</div>
+              <div className="text-sm text-[#2d6a4f] font-medium">Net à payer</div>
+              <div className="text-xs text-[#6b7280] mt-1">{preview.numero}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+              {[
+                ['Jours présents', `${preview.joursPresents}j`],
+                ['Jours absents',  `${preview.joursAbsents}j`],
+                ['Heures normales',`${preview.heuresNormales}h`],
+                ['Heures supp',    `${preview.heuresSupp}h`],
+                ['Total brut',     `${preview.totalBrut?.toFixed(3)} TND`],
+                ['CNSS + IRPP',    `-${((preview.deductions?.cnss || 0) + (preview.deductions?.irpp || 0)).toFixed(3)} TND`],
+              ].map(([l, v]) => (
+                <div key={l} className="bg-[#f5f0e8] rounded-lg p-2">
+                  <div className="text-[#9ca3af]">{l}</div>
+                  <div className="font-bold text-[#1a1a1a]">{v}</div>
+                </div>
               ))}
-            </select>
+            </div>
+            <button onClick={onClose}
+              className="w-full bg-[#2d6a4f] text-white rounded-xl py-2.5 font-bold">
+              Fermer
+            </button>
           </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            {erreur && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">❌ {erreur}</div>}
 
-          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-gray-700 block mb-1">Mois *</label>
-              <select value={form.mois} onChange={e => setForm({...form, mois: Number(e.target.value)})}
+              <label className="text-xs font-bold text-gray-700 block mb-1">Employé *</label>
+              <select value={form.employeId} onChange={e => setForm({...form, employeId: e.target.value})}
                 className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]">
-                {moisNoms.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
+                <option value="">Sélectionner...</option>
+                {employes.map(emp => (
+                  <option key={emp.id} value={emp.id}>{emp.prenom} {emp.nom} — {emp.poste}</option>
+                ))}
               </select>
             </div>
-            <div>
-              <label className="text-xs font-medium text-gray-700 block mb-1">Année *</label>
-              <input type="number" value={form.annee} onChange={e => setForm({...form, annee: Number(e.target.value)})}
-                className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]" />
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Mois</label>
+                <select value={form.mois} onChange={e => setForm({...form, mois: Number(e.target.value)})}
+                  className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]">
+                  {moisNoms.slice(1).map((m, i) => <option key={i+1} value={i+1}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Année</label>
+                <input type="number" value={form.annee} onChange={e => setForm({...form, annee: Number(e.target.value)})}
+                  className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]" />
+              </div>
             </div>
-          </div>
 
-          <div>
-            <label className="text-xs font-medium text-gray-700 block mb-1">Salaire de base (TND) *</label>
-            <input type="number" value={form.salaireBase} onChange={e => setForm({...form, salaireBase: Number(e.target.value)})}
-              className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]" />
-          </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Taux horaire (TND/h)</label>
+                <input type="number" step="0.5" value={form.tauxHoraire}
+                  onChange={e => setForm({...form, tauxHoraire: Number(e.target.value)})}
+                  className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Heures/jour (contrat)</label>
+                <input type="number" step="0.5" value={form.heuresContrat}
+                  onChange={e => setForm({...form, heuresContrat: Number(e.target.value)})}
+                  className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]" />
+              </div>
+            </div>
 
-          <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose}
-              className="flex-1 border border-[#e5e0d8] rounded-xl py-2.5 text-sm font-medium hover:bg-[#f5f0e8] transition-colors">
-              Annuler
-            </button>
-            <button type="submit" disabled={loading}
-              className="flex-1 bg-[#2d6a4f] hover:bg-[#1b4332] text-white rounded-xl py-2.5 text-sm font-semibold transition-colors disabled:opacity-60">
-              {loading ? 'Génération...' : 'Générer PDF'}
-            </button>
-          </div>
-        </form>
+            {/* Preview calcul */}
+            <div className="bg-[#f5f0e8] rounded-xl p-3 text-xs text-[#6b7280]">
+              <div className="font-bold text-[#374151] mb-1">📊 Estimation</div>
+              <div>Salaire base : {(form.tauxHoraire * form.heuresContrat * 22).toFixed(0)} TND/mois</div>
+              <div>Basé sur les pointages réels de {moisNoms[form.mois]}</div>
+            </div>
+
+            <div className="flex gap-3">
+              <button type="button" onClick={onClose}
+                className="flex-1 border border-[#e5e0d8] rounded-xl py-2.5 text-sm font-medium hover:bg-[#f5f0e8] transition-colors">
+                Annuler
+              </button>
+              <button type="submit" disabled={loading}
+                className="flex-1 bg-[#2d6a4f] hover:bg-[#1b4332] text-white rounded-xl py-2.5 text-sm font-bold transition-colors disabled:opacity-60">
+                {loading ? 'Calcul en cours...' : 'Générer la fiche'}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );

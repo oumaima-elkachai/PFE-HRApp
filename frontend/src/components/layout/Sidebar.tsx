@@ -13,7 +13,7 @@ const NAV_CONFIG = {
     { label: 'Pipeline',      icon: GitBranch, path: '/pipeline' },
     { label: 'Job Offers',    icon: Briefcase, path: '/job-offers' },
     { label: 'Time Tracking', icon: Clock,     path: '/time-tracking' },
-    { label: 'Invoicing',     icon: FileText,  path: '/invoicing' },
+    //{ label: 'Invoicing',     icon: FileText,  path: '/invoicing' },
     { label: 'Employees',     icon: Users,     path: '/allemployees' },
     { label: 'Payroll',         icon: FileText,  path: '/payroll' },
     { label: 'Admin Dashboard', icon: Shield,    path: '/admin' },
@@ -21,7 +21,9 @@ const NAV_CONFIG = {
   EMPLOYE: [
     { label: 'My Dashboard',  icon: GitBranch, path: '/employe' },
     //{ label: 'My Timesheets',  icon: Clock,     path: '/employe/time-tracking' },
-    { label: 'Mes Fiches',      icon: FileText, path: '/employe/factures' },
+    { label: 'My Invoices',      icon: FileText, path: '/employe/factures' },
+    { label: 'Historique Pointage',      icon: FileText, path: '/employe/historique-pointage' },
+
     { label: 'My Profile',    icon: Users,     path: '/employe/profile' },
 
   ],

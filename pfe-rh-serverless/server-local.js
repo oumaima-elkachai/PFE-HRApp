@@ -705,6 +705,24 @@ app.get("/factures/pdf/:id", authentifier, async (req, res) => {
     res.status(500).json({ succes: false, erreur: e.message });
   }
 });
+
+
+const { DeleteCommand } = require("@aws-sdk/lib-dynamodb");
+
+// Admin peut supprimer une facture
+app.delete("/factures/:id", authentifier, autoriser("RH"), async (req, res) => {
+  try {
+    await docClient.send(new DeleteCommand({
+      TableName: process.env.TABLE_FACTURES || "Factures-local",
+      Key: { id: req.params.id },
+    }));
+    res.json({ succes: true, data: { message: "Facture supprimée" } });
+  } catch (e) {
+    console.error("Erreur suppression facture:", e);
+    res.status(500).json({ succes: false, erreur: e.message });
+  }
+});
+
 // ══════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════
