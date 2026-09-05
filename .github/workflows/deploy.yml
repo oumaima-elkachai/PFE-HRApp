@@ -1,0 +1,213 @@
+name: Déploiement
+
+# Le déploiement se déclenche sur la branche principale. Les pull
+# requests ne font que vérifier : elles n'obtiennent jamais les
+# identifiants de déploiement, ce que garantit aussi la restriction de
+# branche du rôle IAM.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-3
+  ETAPE: dev
+  NODE_VERSION: '22'
+
+# Requis par la fédération OIDC : sans id-token, GitHub ne délivre pas
+# le jeton signé qu'AWS attend.
+permissions:
+  id-token: write
+  contents: read
+
+# Une seule exécution à la fois : deux déploiements simultanés sur la
+# même pile CloudFormation échoueraient.
+concurrency:
+  group: deploiement-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verifier:
+    name: Vérifications
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Dépendances du back
+        working-directory: pfe-rh-serverless
+        run: npm ci
+
+      # Attrape en deux secondes les erreurs d'import qui feraient
+      # échouer toutes les routes après un déploiement de trois minutes.
+      - name: Chargement de l'application
+        working-directory: pfe-rh-serverless
+        run: node -e "require('./server.js'); console.log('Chargement réussi')"
+
+      - name: Dépendances du front
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typage du front
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Dépendances de l'infrastructure
+        working-directory: infra
+        run: npm ci
+
+      - name: Typage de l'infrastructure
+        working-directory: infra
+        run: npx tsc --noEmit
+
+  planifier:
+    name: Aperçu des changements
+    needs: verifier
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Dépendances
+        run: |
+          cd pfe-rh-serverless && npm ci --omit=dev && cd ..
+          cd infra && npm ci
+
+      # Affiche ce qui serait modifié, sans rien déployer : c'est la
+      # revue d'infrastructure avant fusion.
+      - name: Différentiel
+        working-directory: infra
+        run: npx cdk diff --all -c etape=${{ env.ETAPE }}
+
+  deployer-infrastructure:
+    name: Infrastructure
+    needs: verifier
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      url_api: ${{ steps.sorties.outputs.url_api }}
+      compartiment: ${{ steps.sorties.outputs.compartiment }}
+      distribution: ${{ steps.sorties.outputs.distribution }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # --omit=dev : seules les dépendances de production entrent dans
+      # le paquet Lambda, plafonné à 250 Mo décompressés.
+      - name: Dépendances de production du back
+        working-directory: pfe-rh-serverless
+        run: npm ci --omit=dev
+
+      - name: Dépendances de l'infrastructure
+        working-directory: infra
+        run: npm ci
+
+      - name: Déploiement
+        working-directory: infra
+        run: npx cdk deploy --all -c etape=${{ env.ETAPE }} --require-approval never
+
+      # Les valeurs sont lues depuis CloudFormation plutôt que codées
+      # dans le dépôt : elles restent justes si une pile est recréée.
+      - name: Lecture des sorties
+        id: sorties
+        run: |
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name PfeRh-${{ env.ETAPE }}-Api \
+            --query "Stacks[0].Outputs[?OutputKey=='UrlApi'].OutputValue" --output text)
+          COMPARTIMENT=$(aws cloudformation describe-stacks \
+            --stack-name PfeRh-${{ env.ETAPE }}-Front \
+            --query "Stacks[0].Outputs[?OutputKey=='NomCompartimentFront'].OutputValue" --output text)
+          DISTRIBUTION=$(aws cloudformation describe-stacks \
+            --stack-name PfeRh-${{ env.ETAPE }}-Front \
+            --query "Stacks[0].Outputs[?OutputKey=='IdDistribution'].OutputValue" --output text)
+          echo "url_api=$URL" >> $GITHUB_OUTPUT
+          echo "compartiment=$COMPARTIMENT" >> $GITHUB_OUTPUT
+          echo "distribution=$DISTRIBUTION" >> $GITHUB_OUTPUT
+
+  deployer-front:
+    name: Application web
+    needs: deployer-infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Dépendances
+        working-directory: frontend
+        run: npm ci
+
+      # L'URL de l'API vient du déploiement précédent : le front pointe
+      # toujours vers l'infrastructure réellement en place.
+      - name: Configuration du build
+        working-directory: frontend
+        run: |
+          cat > .env.production <<EOF
+          VITE_API_URL=${{ needs.deployer-infrastructure.outputs.url_api }}
+          VITE_COGNITO_CLIENT_ID=${{ secrets.COGNITO_CLIENT_ID }}
+          VITE_AWS_REGION=${{ env.AWS_REGION }}
+          EOF
+
+      - name: Construction
+        working-directory: frontend
+        run: npm run build
+
+      # Les fichiers portent une empreinte dans leur nom : leur contenu
+      # ne change jamais, ils sont mis en cache un an.
+      - name: Publication des ressources
+        working-directory: frontend
+        run: |
+          aws s3 sync dist/ s3://${{ needs.deployer-infrastructure.outputs.compartiment }} \
+            --delete --exclude "index.html" \
+            --cache-control "public,max-age=31536000,immutable"
+
+      # index.html garde le même nom : jamais de cache, sinon les
+      # navigateurs continueraient de charger l'ancienne application.
+      - name: Publication de index.html
+        working-directory: frontend
+        run: |
+          aws s3 cp dist/index.html s3://${{ needs.deployer-infrastructure.outputs.compartiment }}/index.html \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+
+      - name: Purge du cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ needs.deployer-infrastructure.outputs.distribution }} \
+            --paths "/*"
+
+      - name: Récapitulatif
+        run: |
+          echo "### Déploiement terminé" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- API : ${{ needs.deployer-infrastructure.outputs.url_api }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Application : https://d2cc1fkfzt3nok.cloudfront.net" >> $GITHUB_STEP_SUMMARY

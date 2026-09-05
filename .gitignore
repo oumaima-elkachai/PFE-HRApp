@@ -1,0 +1,18 @@
+﻿node_modules/
+dist/
+build/
+cdk.out/
+.aws-sam/
+
+# Données exportées : salaires, lettres de motivation, adresses.
+# Ne doivent jamais quitter le poste de développement.
+sauvegarde/
+sauvegarde-aws/
+tmp/
+
+*.log
+.DS_Store
+.env.local
+*.local
+.vscode/*
+!.vscode/extensions.json
