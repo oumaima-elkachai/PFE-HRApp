@@ -37,7 +37,7 @@ export default function PayslipsPage() {
       setLoading(true);
       setError('');
 
-      console.log('🔍 Chargement fiches pour employé:', user?.id);
+      console.log('🔍 Chargement fiches pour employé:', user?.sub);
 
       // ✅ Appel API
       const response = await api.get('/factures');
@@ -56,8 +56,8 @@ export default function PayslipsPage() {
         // ✅ Vérification : le backend filtre déjà pour les employés
         // Mais on peut doubler la vérification côté frontend
         const mesFactures = allFactures.filter((f: any) => {
-          const match = f.employeId === user?.id || f.employeId === user?.sub;
-          console.log(`Fiche ${f.numero}: employeId=${f.employeId}, user.id=${user?.id}, match=${match}`);
+          const match =  f.employeId === user?.sub;
+          console.log(`Fiche ${f.numero}: employeId=${f.employeId}, user.id=${user?.sub}, match=${match}`);
           return match;
         });
 
@@ -65,8 +65,8 @@ export default function PayslipsPage() {
         setFactures(mesFactures);
 
         if (mesFactures.length === 0 && allFactures.length > 0) {
-          console.warn('⚠️ Aucune fiche ne correspond à user.id:', user?.id);
-          setError(`Aucune fiche trouvée pour votre compte (ID: ${user?.id})`);
+          console.warn('⚠️ Aucune fiche ne correspond à user.id:', user?.sub);
+          setError(`Aucune fiche trouvée pour votre compte (ID: ${user?.sub})`);
         }
       } else {
         throw new Error('Format de réponse invalide');
@@ -81,7 +81,7 @@ export default function PayslipsPage() {
   };
 
   charger();
-}, [user?.id, user?.sub]);
+}, [ user?.sub]);
 
   const handleDownload = (facture: Facture) => {
     if (!facture.pdfBase64) {
@@ -137,7 +137,7 @@ export default function PayslipsPage() {
             </p>
             {/* Debug info */}
             <p className="text-xs text-[#9ca3af] mt-2">
-              ID utilisateur: {user?.id || 'non défini'}
+              ID utilisateur: {user?.sub || 'non défini'}
             </p>
           </div>
 
