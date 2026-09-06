@@ -31,7 +31,7 @@ export default function EmployeeDashboard() {
         
         // ✅ Filtrer les factures pour l'employé connecté
         const allFactures = facRes?.data?.factures ?? [];
-        const mesFactures = allFactures.filter((f: any) => f.employeId === user?.id);
+        const mesFactures = allFactures.filter((f: any) => f.employeId === user?.sub);
         
         setFactures(mesFactures.slice(0, 5));
         setEvenements((evRes?.data?.evenements ?? []).slice(0, 3));
@@ -48,7 +48,7 @@ export default function EmployeeDashboard() {
       }
     };
     charger();
-  }, [user?.id]); // ✅ Ajouter user?.id comme dépendance
+  }, [user?.sub]); 
 
   const handlePointage = async () => {
     setPtLoading(true);
