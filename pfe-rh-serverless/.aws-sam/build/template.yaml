@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: PFE - Application RH Serverless
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        DYNAMODB_ENDPOINT: ''
+        TABLE_EMPLOYES:
+          Ref: TableEmployes
+        TABLE_CANDIDATS:
+          Ref: TableCandidats
+        TABLE_POINTAGES:
+          Ref: TablePointages
+        TABLE_EVENEMENTS:
+          Ref: TableEvenements
+        TABLE_FACTURES:
+          Ref: TableFactures
+Resources:
+  ApiRH:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: dev
+      Cors:
+        AllowMethods: '''GET,POST,PUT,DELETE,OPTIONS'''
+        AllowHeaders: '''Content-Type,Authorization'''
+        AllowOrigin: '''*'''
+  ListerEmployes:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/employes/lister.handler
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: TableEmployes
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ApiRH
+            Path: /employes
+            Method: GET
+      CodeUri: ListerEmployes
+    Metadata:
+      SamResourceId: ListerEmployes
+  CreerEmploye:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/employes/creer.handler
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: TableEmployes
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ApiRH
+            Path: /employes
+            Method: POST
+      CodeUri: CreerEmploye
+    Metadata:
+      SamResourceId: CreerEmploye
+  TableEmployes:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Employes-dev
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+  TableCandidats:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Candidats-dev
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+  TablePointages:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Pointages-dev
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+  TableEvenements:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Evenements-dev
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+  TableFactures:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Factures-dev
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+Outputs:
+  ApiUrl:
+    Value:
+      Fn::Sub: https://${ApiRH}.execute-api.${AWS::Region}.amazonaws.com/dev
