@@ -1,0 +1,77 @@
+name: Analyse du code
+
+# Analyse statique approfondie, séparée du pipeline de déploiement :
+# elle est plus lente et ne doit pas retarder une livraison.
+#
+#   CodeQL      — vulnérabilités réelles : injections, données non
+#                 validées, chemins d'exécution dangereux
+#   SonarCloud  — duplication, complexité, points chauds de sécurité,
+#                 suivi de la couverture de tests dans le temps
+#
+# Les deux sont gratuits sur dépôt public.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Une analyse hebdomadaire détecte les failles publiées après le
+    # dernier commit, sur du code qui n'a pourtant pas changé.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialisation
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # security-and-quality élargit l'analyse au-delà des seules
+          # failles : code mort, comparaisons impossibles, promesses
+          # non attendues.
+          queries: security-and-quality
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:javascript-typescript'
+
+  sonarcloud:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # SonarCloud a besoin de l'historique complet pour attribuer
+          # chaque ligne à son auteur et calculer le code neuf.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Dépendances
+        working-directory: pfe-rh-serverless
+        run: npm ci
+
+      # La couverture est produite ici puis transmise à SonarCloud :
+      # sans elle, l'outil ne peut pas distinguer le code testé du reste.
+      - name: Tests et couverture
+        working-directory: pfe-rh-serverless
+        run: npx jest src/utils/__tests__ --coverage --coverageReporters=lcov --coverageReporters=text-summary
+
+      - name: Analyse
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

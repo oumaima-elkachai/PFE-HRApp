@@ -79,9 +79,22 @@ const cicd = new CicdStack(app, `PfeRh-${etape.nom}-Cicd`, {
   description: `TERRA HR — rôle de déploiement GitHub Actions (${etape.nom})`,
 });
 
+import { SupervisionStack } from "../lib/supervision-stack";
+
+const supervision = new SupervisionStack(app, `PfeRh-${etape.nom}-Supervision`, {
+  env,
+  etape,
+  fonction: api.fonction,
+  api: api.api,
+  tables: donnees.tables,
+  description: `TERRA HR — tableau de bord et alarmes (${etape.nom})`,
+});
+
 app.synth();
 
 // Références conservées pour les stacks à venir (supervision, alarmes)
 void api;
 void front;
 void cicd;
+void supervision;
+

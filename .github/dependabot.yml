@@ -1,0 +1,72 @@
+# .github/dependabot.yml
+#
+# Dependabot ouvre une pull request lorsqu'une dépendance publie une
+# version corrigeant une faille, ou simplement une mise à jour.
+#
+# Les pull requests passent par le pipeline complet : tests, analyse et
+# cdk diff s'exécutent avant toute fusion. Une mise à jour qui casse
+# quelque chose est donc détectée sans jamais atteindre la production.
+
+version: 2
+
+updates:
+  # ── Application serveur ────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /pfe-rh-serverless
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependances, backend]
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Le SDK AWS publie une version presque quotidienne : les traiter
+      # séparément produirait un flot ingérable de pull requests.
+      aws-sdk:
+        patterns: ["@aws-sdk/*"]
+      development:
+        dependency-type: development
+
+  # ── Application web ────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependances, frontend]
+    commit-message:
+      prefix: "deps"
+    groups:
+      react:
+        patterns: ["react", "react-dom", "react-router*", "@types/react*"]
+      development:
+        dependency-type: development
+    ignore:
+      # Une montée de version majeure de React demande une migration
+      # délibérée, pas une fusion automatique.
+      - dependency-name: react
+        update-types: [version-update:semver-major]
+      - dependency-name: react-dom
+        update-types: [version-update:semver-major]
+
+  # ── Infrastructure ─────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /infra
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels: [dependances, infrastructure]
+    commit-message:
+      prefix: "deps"
+
+  # ── Actions du pipeline ────────────────────────────────────────
+  # Les actions tierces s'exécutent avec les droits du workflow :
+  # les tenir à jour est une mesure de sécurité, pas de confort.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependances, ci]
