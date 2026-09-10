@@ -1,14 +1,17 @@
 name: Analyse du code
 
-# Analyse statique approfondie, séparée du pipeline de déploiement :
+# Analyse statique approfondie, separee du pipeline de deploiement :
 # elle est plus lente et ne doit pas retarder une livraison.
 #
-#   CodeQL      — vulnérabilités réelles : injections, données non
-#                 validées, chemins d'exécution dangereux
-#   SonarCloud  — duplication, complexité, points chauds de sécurité,
+#   CodeQL      - vulnerabilites reelles : injections, donnees non
+#                 validees, chemins d'execution dangereux
+#   SonarCloud  - duplication, complexite, points chauds de securite,
 #                 suivi de la couverture de tests dans le temps
 #
-# Les deux sont gratuits sur dépôt public.
+# Les deux sont gratuits sur depot public.
+#
+# Fichier ecrit sans accents : PowerShell corrompt les caracteres
+# accentues lors des editions par script.
 
 on:
   push:
@@ -16,8 +19,8 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Une analyse hebdomadaire détecte les failles publiées après le
-    # dernier commit, sur du code qui n'a pourtant pas changé.
+    # Une analyse hebdomadaire detecte les failles publiees apres le
+    # dernier commit, sur du code qui n'a pourtant pas change.
     - cron: '0 6 * * 1'
   workflow_dispatch:
 
@@ -31,13 +34,13 @@ jobs:
     name: CodeQL
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Initialisation
         uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
-          # security-and-quality élargit l'analyse au-delà des seules
+          # security-and-quality elargit l'analyse au-dela des seules
           # failles : code mort, comparaisons impossibles, promesses
           # non attendues.
           queries: security-and-quality
@@ -51,22 +54,22 @@ jobs:
     name: SonarCloud
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # SonarCloud a besoin de l'historique complet pour attribuer
-          # chaque ligne à son auteur et calculer le code neuf.
+          # chaque ligne a son auteur et calculer le code neuf.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
-      - name: Dépendances
+      - name: Dependances
         working-directory: pfe-rh-serverless
         run: npm ci
 
-      # La couverture est produite ici puis transmise à SonarCloud :
-      # sans elle, l'outil ne peut pas distinguer le code testé du reste.
+      # La couverture est produite ici puis transmise a SonarCloud :
+      # sans elle, l'outil ne peut pas distinguer le code teste du reste.
       - name: Tests et couverture
         working-directory: pfe-rh-serverless
         run: npx jest src/utils/__tests__ --coverage --coverageReporters=lcov --coverageReporters=text-summary

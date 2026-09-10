@@ -1,17 +1,20 @@
-name: Déploiement
+name: Deploiement
 
-# Étapes du pipeline :
+# Etapes du pipeline :
 #
-#   qualite    → typage et style, sur les trois dossiers
-#   tests      → tests unitaires du moteur de paie
-#   securite   → vulnérabilités des dépendances, fuites de secrets
-#   apercu     → cdk diff, uniquement sur les pull requests
-#   infra      → déploiement des cinq piles CDK
-#   fumee      → l'API répond-elle réellement après déploiement
-#   front      → construction et publication de l'application web
-#   final      → l'application est-elle servie par CloudFront
+#   qualite    -> typage et style, sur les trois dossiers
+#   tests      -> tests unitaires du moteur de paie
+#   securite   -> vulnerabilites des dependances, fuites de secrets
+#   apercu     -> cdk diff, uniquement sur les pull requests
+#   infra      -> deploiement des cinq piles CDK
+#   fumee      -> l'API repond-elle reellement apres deploiement
+#   front      -> construction et publication de l'application web
+#   final      -> l'application est-elle servie par CloudFront
 #
-# Les étapes s'enchaînent : un échec en amont empêche tout déploiement.
+# Les etapes s'enchainent : un echec en amont empeche tout deploiement.
+#
+# Ce fichier est volontairement ecrit sans accents : PowerShell corrompt
+# les caracteres accentues lors des editions par script.
 
 on:
   push:
@@ -34,30 +37,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ── Intégration ──────────────────────────────────────────────────
+  # ---- Integration ------------------------------------------------
 
   qualite:
-    name: Qualité du code
+    name: Qualite du code
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: '**/package-lock.json'
 
-      - name: Dépendances
+      - name: Dependances
         run: |
           cd pfe-rh-serverless && npm ci && cd ..
           cd frontend && npm ci && cd ..
           cd infra && npm ci
 
       # Attrape en deux secondes les erreurs d'import qui feraient
-      # échouer toutes les routes après un déploiement de trois minutes.
+      # echouer toutes les routes apres un deploiement de trois minutes.
       - name: Chargement de l'application
         working-directory: pfe-rh-serverless
-        run: node -e "require('./server.js'); console.log('Chargement réussi')"
+        run: node -e "require('./server.js'); console.log('Chargement reussi')"
 
       - name: Typage du front
         working-directory: frontend
@@ -67,8 +70,8 @@ jobs:
         working-directory: infra
         run: npx tsc --noEmit
 
-      # Le linting signale notamment les hooks React mal placés, une
-      # erreur qui ne se manifeste autrement qu'à l'exécution.
+      # Le linting signale notamment les hooks React mal places, une
+      # erreur qui ne se manifeste autrement qu'a l'execution.
       - name: Style du front
         working-directory: frontend
         run: npx eslint . --max-warnings 0
@@ -78,18 +81,18 @@ jobs:
     name: Tests unitaires
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: pfe-rh-serverless/package-lock.json
 
-      - name: Dépendances
+      - name: Dependances
         working-directory: pfe-rh-serverless
         run: npm ci
 
-      # Le moteur de paie applique un barème légal : une régression y
+      # Le moteur de paie applique un bareme legal : une regression y
       # produirait des bulletins faux sans lever la moindre erreur.
       - name: Moteur de paie
         working-directory: pfe-rh-serverless
@@ -101,50 +104,58 @@ jobs:
         continue-on-error: true
 
   securite:
-    name: Analyse de sécurité
+    name: Analyse de securite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # Signale les dépendances portant une vulnérabilité connue.
-      # En avertissement : une faille dans un outil de développement ne
-      # doit pas bloquer une livraison, mais doit être visible.
-      - name: Vulnérabilités du back
+      # Signale les dependances portant une vulnerabilite connue.
+      # En avertissement : une faille dans un outil de developpement ne
+      # doit pas bloquer une livraison, mais doit rester visible.
+      - name: Vulnerabilites du back
         working-directory: pfe-rh-serverless
         run: npm audit --audit-level=high
         continue-on-error: true
 
-      - name: Vulnérabilités du front
+      - name: Vulnerabilites du front
         working-directory: frontend
         run: npm audit --audit-level=high
         continue-on-error: true
 
-      # Recherche de secrets committés par inadvertance. Bloquant :
-      # une clé publiée reste dans l'historique Git même après suppression.
+      # Recherche de secrets committes par inadvertance. Bloquant :
+      # une cle publiee reste dans l'historique Git meme apres suppression.
+      #
+      # Le motif exige une valeur affectee, pas la simple mention du nom :
+      # process.env.AWS_SECRET_ACCESS_KEY est legitime, une chaine de
+      # vingt caracteres ou plus apres le signe egal ne l'est pas.
+      #
+      # .github est exclu, sinon ce motif se detecterait lui-meme.
       - name: Recherche de secrets
         run: |
-          MOTIFS='AKIA[0-9A-Z]{16}|aws_secret_access_key|-----BEGIN (RSA|OPENSSH) PRIVATE KEY-----'
-          if grep -rEn "$MOTIFS" --include='*.ts' --include='*.js' --include='*.tsx' \
+          MOTIFS='AKIA[0-9A-Z]{16}|aws_secret_access_key["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"'][A-Za-z0-9/+=]{20,}|-----BEGIN (RSA|OPENSSH) PRIVATE KEY-----'
+          if grep -rEn "$MOTIFS" \
+               --include='*.ts' --include='*.js' --include='*.tsx' \
                --include='*.json' --include='*.yml' \
-               --exclude-dir=node_modules --exclude-dir=.git . ; then
-            echo "::error::Secret potentiel détecté dans le code source"
+               --exclude-dir=node_modules --exclude-dir=.git \
+               --exclude-dir=dist --exclude-dir=cdk.out --exclude-dir=.github . ; then
+            echo "::error::Secret potentiel detecte dans le code source"
             exit 1
           fi
-          echo "Aucun secret détecté"
+          echo "Aucun secret detecte"
 
-  # ── Revue avant fusion ───────────────────────────────────────────
+  # ---- Revue avant fusion -----------------------------------------
 
   apercu:
-    name: Aperçu des changements
+    name: Apercu des changements
     needs: [qualite, tests, securite]
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -153,18 +164,18 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Dépendances
+      - name: Dependances
         run: |
           cd pfe-rh-serverless && npm ci --omit=dev && cd ..
           cd infra && npm ci
 
-      # Affiche ce que le déploiement modifierait, sans rien appliquer :
-      # la revue de code étendue à l'infrastructure.
-      - name: Différentiel d'infrastructure
+      # Affiche ce que le deploiement modifierait, sans rien appliquer :
+      # la revue de code etendue a l'infrastructure.
+      - name: Differentiel d'infrastructure
         working-directory: infra
         run: npx cdk diff --all -c etape=${{ env.ETAPE }}
 
-  # ── Livraison ────────────────────────────────────────────────────
+  # ---- Livraison --------------------------------------------------
 
   infra:
     name: Infrastructure
@@ -177,8 +188,8 @@ jobs:
       distribution: ${{ steps.sorties.outputs.distribution }}
       url_application: ${{ steps.sorties.outputs.url_application }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -187,22 +198,22 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # --omit=dev : seules les dépendances de production entrent dans le
-      # paquet Lambda, plafonné à 250 Mo décompressés.
-      - name: Dépendances de production
+      # --omit=dev : seules les dependances de production entrent dans le
+      # paquet Lambda, plafonne a 250 Mo decompresses.
+      - name: Dependances de production
         working-directory: pfe-rh-serverless
         run: npm ci --omit=dev
 
-      - name: Dépendances de l'infrastructure
+      - name: Dependances de l'infrastructure
         working-directory: infra
         run: npm ci
 
-      - name: Déploiement
+      - name: Deploiement
         working-directory: infra
         run: npx cdk deploy --all -c etape=${{ env.ETAPE }} --require-approval never
 
-      # Les valeurs sont lues depuis CloudFormation plutôt que codées
-      # dans le dépôt : elles restent justes si une pile est recréée.
+      # Les valeurs sont lues depuis CloudFormation plutot que codees
+      # dans le depot : elles restent justes si une pile est recreee.
       - name: Lecture des sorties
         id: sorties
         run: |
@@ -216,32 +227,32 @@ jobs:
           echo "url_application=$(lire PfeRh-${{ env.ETAPE }}-Front UrlApplication)" >> $GITHUB_OUTPUT
 
   fumee:
-    name: Test de fumée de l'API
+    name: Test de fumee de l'API
     needs: infra
     runs-on: ubuntu-latest
     steps:
-      # Une fonction qui ne démarre plus renvoie 500 sur toutes les
-      # routes. Sans ce contrôle, l'échec ne se découvre qu'à l'usage.
+      # Une fonction qui ne demarre plus renvoie 500 sur toutes les
+      # routes. Sans ce controle, l'echec ne se decouvre qu'a l'usage.
       - name: Route publique
         run: |
           URL="${{ needs.infra.outputs.url_api }}/offres"
           CODE=$(curl -s -o /tmp/reponse -w "%{http_code}" "$URL")
-          echo "GET /offres → $CODE"
-          cat /tmp/reponse | head -c 300
+          echo "GET /offres -> $CODE"
+          head -c 300 /tmp/reponse
           if [ "$CODE" != "200" ]; then
-            echo "::error::L'API ne répond pas correctement ($CODE)"
+            echo "::error::L'API ne repond pas correctement ($CODE)"
             exit 1
           fi
 
-      # Une route protégée doit être rejetée par la passerelle avant
-      # même d'invoquer la fonction.
-      - name: Route protégée sans jeton
+      # Une route protegee doit etre rejetee par la passerelle avant
+      # meme d'invoquer la fonction.
+      - name: Route protegee sans jeton
         run: |
           URL="${{ needs.infra.outputs.url_api }}/employes"
           CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
-          echo "GET /employes sans jeton → $CODE"
+          echo "GET /employes sans jeton -> $CODE"
           if [ "$CODE" != "401" ]; then
-            echo "::error::L'autorisation ne protège pas la route ($CODE)"
+            echo "::error::L'autorisation ne protege pas la route ($CODE)"
             exit 1
           fi
 
@@ -250,8 +261,8 @@ jobs:
     needs: [infra, fumee]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -262,12 +273,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Dépendances
+      - name: Dependances
         working-directory: frontend
         run: npm ci
 
-      # L'URL de l'API vient du déploiement qui précède : le front
-      # pointe toujours vers l'infrastructure réellement en place.
+      # L'URL de l'API vient du deploiement qui precede : le front
+      # pointe toujours vers l'infrastructure reellement en place.
       - name: Configuration du build
         working-directory: frontend
         run: |
@@ -290,7 +301,7 @@ jobs:
             --delete --exclude "index.html" \
             --cache-control "public,max-age=31536000,immutable"
 
-      # index.html garde le même nom d'une version à l'autre : jamais de
+      # index.html garde le meme nom d'une version a l'autre : jamais de
       # cache, sinon les navigateurs chargeraient l'ancienne application.
       - name: Publication de index.html
         working-directory: frontend
@@ -306,7 +317,7 @@ jobs:
             --paths "/*"
 
   final:
-    name: Vérification finale
+    name: Verification finale
     needs: [infra, front]
     runs-on: ubuntu-latest
     steps:
@@ -314,21 +325,21 @@ jobs:
         run: |
           sleep 20
           CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ needs.infra.outputs.url_application }}")
-          echo "GET application → $CODE"
+          echo "GET application -> $CODE"
           if [ "$CODE" != "200" ]; then
             echo "::error::CloudFront ne sert pas l'application ($CODE)"
             exit 1
           fi
 
-      - name: Récapitulatif
+      - name: Recapitulatif
         run: |
           {
-            echo "## Déploiement réussi"
+            echo "## Deploiement reussi"
             echo ""
             echo "| | |"
             echo "|---|---|"
             echo "| Environnement | \`${{ env.ETAPE }}\` |"
-            echo "| Région | \`${{ env.AWS_REGION }}\` |"
+            echo "| Region | \`${{ env.AWS_REGION }}\` |"
             echo "| API | ${{ needs.infra.outputs.url_api }} |"
             echo "| Application | ${{ needs.infra.outputs.url_application }} |"
             echo "| Commit | \`${{ github.sha }}\` |"
