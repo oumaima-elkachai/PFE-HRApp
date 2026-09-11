@@ -1,26 +1,30 @@
-name: Deploiement
+name: CI/CD
 
-# Etapes du pipeline :
+# Chaine complete d'integration et de livraison continues.
 #
-#   qualite    -> typage et style, sur les trois dossiers
-#   tests      -> tests unitaires du moteur de paie
-#   securite   -> vulnerabilites des dependances, fuites de secrets
-#   apercu     -> cdk diff, uniquement sur les pull requests
-#   infra      -> deploiement des cinq piles CDK
-#   fumee      -> l'API repond-elle reellement apres deploiement
-#   front      -> construction et publication de l'application web
-#   final      -> l'application est-elle servie par CloudFront
+#   ETAPE 1 - INTEGRATION      qualite, tests, securite, analyse
+#   ETAPE 2 - REVUE            differentiel d'infrastructure (pull requests)
+#   ETAPE 3 - LIVRAISON        deploiement des piles CDK
+#   ETAPE 4 - VALIDATION       tests de fumee sur l'API deployee
+#   ETAPE 5 - PUBLICATION      construction et mise en ligne du front
+#   ETAPE 6 - RECETTE          verification de bout en bout
 #
-# Les etapes s'enchainent : un echec en amont empeche tout deploiement.
+# CodeQL et SonarCloud s'executent en parallele du deploiement : ils
+# durent plusieurs minutes et leur resultat n'est pas bloquant pour une
+# livraison. Ils apparaissent neanmoins dans le meme graphe.
 #
-# Ce fichier est volontairement ecrit sans accents : PowerShell corrompt
-# les caracteres accentues lors des editions par script.
+# Fichier ecrit sans accents : PowerShell corrompt les caracteres
+# accentues lors des editions par script.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Analyse hebdomadaire : detecte les failles publiees apres le
+    # dernier commit, sur du code qui n'a pourtant pas change.
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 env:
@@ -31,16 +35,22 @@ env:
 permissions:
   id-token: write
   contents: read
+  security-events: write
+  actions: read
 
 concurrency:
-  group: deploiement-${{ github.ref }}
+  group: cicd-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # ---- Integration ------------------------------------------------
+
+  # ================================================================
+  # ETAPE 1 - INTEGRATION
+  # ================================================================
 
   qualite:
-    name: Qualite du code
+    name: 1a - Qualite du code
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -78,7 +88,8 @@ jobs:
         continue-on-error: true
 
   tests:
-    name: Tests unitaires
+    name: 1b - Tests unitaires
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -98,13 +109,22 @@ jobs:
         working-directory: pfe-rh-serverless
         run: npx jest src/utils/__tests__ --verbose
 
-      - name: Couverture
+      - name: Rapport de couverture
         working-directory: pfe-rh-serverless
-        run: npx jest src/utils/__tests__ --coverage --coverageReporters=text-summary
+        run: |
+          npx jest src/utils/__tests__ --coverage --coverageReporters=text-summary \
+            | tee /tmp/couverture.txt
+          {
+            echo "### Couverture du moteur de paie"
+            echo '```'
+            cat /tmp/couverture.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
         continue-on-error: true
 
   securite:
-    name: Analyse de securite
+    name: 1c - Securite des dependances
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -125,14 +145,12 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
-      # Recherche de secrets committes par inadvertance. Bloquant :
-      # une cle publiee reste dans l'historique Git meme apres suppression.
+      # Bloquant : une cle publiee reste dans l'historique Git meme
+      # apres suppression du fichier.
       #
-      # Le motif exige une valeur affectee, pas la simple mention du nom :
-      # process.env.AWS_SECRET_ACCESS_KEY est legitime, une chaine de
-      # vingt caracteres ou plus apres le signe egal ne l'est pas.
-      #
-      # .github est exclu, sinon ce motif se detecterait lui-meme.
+      # Le motif exige une valeur affectee, pas la simple mention du
+      # nom : process.env.AWS_SECRET_ACCESS_KEY est legitime. Le
+      # dossier .github est exclu, sinon le motif se detecte lui-meme.
       - name: Recherche de secrets
         run: |
           MOTIFS='AKIA[0-9A-Z]{16}|aws_secret_access_key["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"'][A-Za-z0-9/+=]{20,}|-----BEGIN (RSA|OPENSSH) PRIVATE KEY-----'
@@ -146,12 +164,67 @@ jobs:
           fi
           echo "Aucun secret detecte"
 
-  # ---- Revue avant fusion -----------------------------------------
+  codeql:
+    name: 1d - Analyse CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialisation
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          # security-and-quality elargit l'analyse au-dela des seules
+          # failles : code mort, comparaisons impossibles, promesses
+          # non attendues.
+          queries: security-and-quality
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:javascript-typescript'
+
+  sonarcloud:
+    name: 1e - Analyse SonarCloud
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # SonarCloud a besoin de l'historique complet pour attribuer
+          # chaque ligne a son auteur et calculer le code neuf.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Dependances
+        working-directory: pfe-rh-serverless
+        run: npm ci
+
+      # La couverture est produite ici puis transmise a SonarCloud :
+      # sans elle, l'outil ne distingue pas le code teste du reste.
+      - name: Tests et couverture
+        working-directory: pfe-rh-serverless
+        run: npx jest src/utils/__tests__ --coverage --coverageReporters=lcov
+
+      - name: Analyse
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        continue-on-error: true
+
+  # ================================================================
+  # ETAPE 2 - REVUE (pull requests uniquement)
+  # ================================================================
 
   apercu:
-    name: Apercu des changements
+    name: 2 - Differentiel d'infrastructure
     needs: [qualite, tests, securite]
-    if: github.event_name == 'pull_request'
+    # Les pull requests de Dependabot n'ont pas acces aux secrets :
+    # protection de GitHub contre l'exfiltration. Le differentiel n'a
+    # de toute facon aucun sens pour une montee de version.
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -159,7 +232,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -171,16 +244,18 @@ jobs:
 
       # Affiche ce que le deploiement modifierait, sans rien appliquer :
       # la revue de code etendue a l'infrastructure.
-      - name: Differentiel d'infrastructure
+      - name: Differentiel
         working-directory: infra
         run: npx cdk diff --all -c etape=${{ env.ETAPE }}
 
-  # ---- Livraison --------------------------------------------------
+  # ================================================================
+  # ETAPE 3 - LIVRAISON
+  # ================================================================
 
-  infra:
-    name: Infrastructure
+  infrastructure:
+    name: 3 - Deploiement de l'infrastructure
     needs: [qualite, tests, securite]
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       url_api: ${{ steps.sorties.outputs.url_api }}
@@ -193,13 +268,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # --omit=dev : seules les dependances de production entrent dans le
-      # paquet Lambda, plafonne a 250 Mo decompresses.
+      # --omit=dev : seules les dependances de production entrent dans
+      # le paquet Lambda, plafonne a 250 Mo decompresses.
       - name: Dependances de production
         working-directory: pfe-rh-serverless
         run: npm ci --omit=dev
@@ -208,7 +283,7 @@ jobs:
         working-directory: infra
         run: npm ci
 
-      - name: Deploiement
+      - name: Deploiement des six piles
         working-directory: infra
         run: npx cdk deploy --all -c etape=${{ env.ETAPE }} --require-approval never
 
@@ -226,16 +301,20 @@ jobs:
           echo "distribution=$(lire PfeRh-${{ env.ETAPE }}-Front IdDistribution)" >> $GITHUB_OUTPUT
           echo "url_application=$(lire PfeRh-${{ env.ETAPE }}-Front UrlApplication)" >> $GITHUB_OUTPUT
 
+  # ================================================================
+  # ETAPE 4 - VALIDATION
+  # ================================================================
+
   fumee:
-    name: Test de fumee de l'API
-    needs: infra
+    name: 4 - Tests de fumee
+    needs: infrastructure
     runs-on: ubuntu-latest
     steps:
       # Une fonction qui ne demarre plus renvoie 500 sur toutes les
       # routes. Sans ce controle, l'echec ne se decouvre qu'a l'usage.
-      - name: Route publique
+      - name: Route publique accessible
         run: |
-          URL="${{ needs.infra.outputs.url_api }}/offres"
+          URL="${{ needs.infrastructure.outputs.url_api }}/offres"
           CODE=$(curl -s -o /tmp/reponse -w "%{http_code}" "$URL")
           echo "GET /offres -> $CODE"
           head -c 300 /tmp/reponse
@@ -245,10 +324,11 @@ jobs:
           fi
 
       # Une route protegee doit etre rejetee par la passerelle avant
-      # meme d'invoquer la fonction.
-      - name: Route protegee sans jeton
+      # meme d'invoquer la fonction : c'est un test de securite, pas
+      # seulement un test fonctionnel.
+      - name: Route protegee refusee sans jeton
         run: |
-          URL="${{ needs.infra.outputs.url_api }}/employes"
+          URL="${{ needs.infrastructure.outputs.url_api }}/employes"
           CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
           echo "GET /employes sans jeton -> $CODE"
           if [ "$CODE" != "401" ]; then
@@ -256,9 +336,13 @@ jobs:
             exit 1
           fi
 
-  front:
-    name: Application web
-    needs: [infra, fumee]
+  # ================================================================
+  # ETAPE 5 - PUBLICATION
+  # ================================================================
+
+  application:
+    name: 5 - Publication de l'application web
+    needs: [infrastructure, fumee]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -268,7 +352,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -283,7 +367,7 @@ jobs:
         working-directory: frontend
         run: |
           cat > .env.production <<EOF
-          VITE_API_URL=${{ needs.infra.outputs.url_api }}
+          VITE_API_URL=${{ needs.infrastructure.outputs.url_api }}
           VITE_COGNITO_CLIENT_ID=${{ secrets.COGNITO_CLIENT_ID }}
           VITE_AWS_REGION=${{ env.AWS_REGION }}
           EOF
@@ -294,10 +378,10 @@ jobs:
 
       # Les fichiers portent une empreinte dans leur nom : leur contenu
       # ne change jamais, ils sont mis en cache un an.
-      - name: Publication des ressources
+      - name: Publication des ressources statiques
         working-directory: frontend
         run: |
-          aws s3 sync dist/ s3://${{ needs.infra.outputs.compartiment }} \
+          aws s3 sync dist/ s3://${{ needs.infrastructure.outputs.compartiment }} \
             --delete --exclude "index.html" \
             --cache-control "public,max-age=31536000,immutable"
 
@@ -306,25 +390,30 @@ jobs:
       - name: Publication de index.html
         working-directory: frontend
         run: |
-          aws s3 cp dist/index.html s3://${{ needs.infra.outputs.compartiment }}/index.html \
+          aws s3 cp dist/index.html s3://${{ needs.infrastructure.outputs.compartiment }}/index.html \
             --cache-control "no-cache,no-store,must-revalidate" \
             --content-type "text/html; charset=utf-8"
 
-      - name: Purge du cache
+      - name: Purge du cache CloudFront
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ needs.infra.outputs.distribution }} \
+            --distribution-id ${{ needs.infrastructure.outputs.distribution }} \
             --paths "/*"
 
-  final:
-    name: Verification finale
-    needs: [infra, front]
+  # ================================================================
+  # ETAPE 6 - RECETTE
+  # ================================================================
+
+  recette:
+    name: 6 - Verification de bout en bout
+    needs: [infrastructure, application]
     runs-on: ubuntu-latest
     steps:
-      - name: Application servie
+      - name: Application servie par CloudFront
         run: |
+          # La propagation de l'invalidation prend quelques secondes
           sleep 20
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ needs.infra.outputs.url_application }}")
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ needs.infrastructure.outputs.url_application }}")
           echo "GET application -> $CODE"
           if [ "$CODE" != "200" ]; then
             echo "::error::CloudFront ne sert pas l'application ($CODE)"
@@ -334,13 +423,15 @@ jobs:
       - name: Recapitulatif
         run: |
           {
-            echo "## Deploiement reussi"
+            echo "## Livraison reussie"
             echo ""
-            echo "| | |"
+            echo "| Element | Valeur |"
             echo "|---|---|"
             echo "| Environnement | \`${{ env.ETAPE }}\` |"
             echo "| Region | \`${{ env.AWS_REGION }}\` |"
-            echo "| API | ${{ needs.infra.outputs.url_api }} |"
-            echo "| Application | ${{ needs.infra.outputs.url_application }} |"
+            echo "| API | ${{ needs.infrastructure.outputs.url_api }} |"
+            echo "| Application | ${{ needs.infrastructure.outputs.url_application }} |"
             echo "| Commit | \`${{ github.sha }}\` |"
+            echo ""
+            echo "Six piles CDK deployees : Data, Auth, Api, Front, Cicd, Supervision."
           } >> $GITHUB_STEP_SUMMARY
