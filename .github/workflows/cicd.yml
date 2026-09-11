@@ -209,7 +209,7 @@ jobs:
         run: npx jest src/utils/__tests__ --coverage --coverageReporters=lcov
 
       - name: Analyse
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         continue-on-error: true
