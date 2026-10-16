@@ -31,7 +31,7 @@
     "pdf-parse": "^2.4.5",
     "pdfkit": "^0.15.0",
     "serverless-http": "^4.0.0",
-    "uuid": "^9.0.1"
+    "uuid": "^14.0.2"
   },
   "devDependencies": {
     "@types/axios": "^0.9.36",
