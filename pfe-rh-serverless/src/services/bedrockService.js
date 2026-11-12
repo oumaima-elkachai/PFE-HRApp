@@ -313,4 +313,76 @@ function fallbackScoring({
   };
 }
 
-module.exports = { analyserCV, genererQuizIA, extraireTexteCV };
+/**
+ * Évalue des réponses rédigées selon les critères définis à la
+ * génération du quiz.
+ *
+ * Un seul appel pour toutes les questions ouvertes : grouper divise
+ * le coût et la latence par le nombre de questions.
+ */
+async function evaluerReponsesOuvertes({ offreTitre, elements }) {
+  const prompt = `Tu es un correcteur technique. Évalue ces réponses de candidat pour le poste : ${offreTitre}.
+
+Pour chaque réponse, attribue un score de 0 à 100 mesurant dans quelle proportion elle satisfait les critères attendus.
+
+Barème :
+- 0 à 30 : hors sujet, ou aucun critère abordé
+- 31 à 59 : partiellement correct, critères principaux manquants
+- 60 à 79 : correct, la plupart des critères satisfaits
+- 80 à 100 : complet et précis, tous les critères couverts
+
+Sois exigeant mais juste. Une réponse courte mais exacte vaut mieux qu'une réponse longue et vague.
+
+${elements.map((e, i) => `
+--- Question ${i + 1} (id: ${e.questionId}) ---
+Énoncé : ${e.question}
+Critères attendus : ${e.criteres.length ? e.criteres.join(" ; ") : "pertinence technique et clarté"}
+Réponse du candidat : ${String(e.reponse).substring(0, 1200)}
+`).join("\n")}
+
+Réponds uniquement par ce JSON, sans texte autour :
+{
+  "notes": [
+    {
+      "questionId": "identifiant exact de la question",
+      "score": <entier 0-100>,
+      "criteresSatisfaits": ["critères réellement traités"],
+      "commentaire": "une phrase à destination du recruteur"
+    }
+  ]
+}`;
+
+  try {
+    const brut = await callClaude(prompt, 1500);
+    const correspondance = brut.match(/\{[\s\S]*\}/);
+    if (!correspondance) throw new Error("Réponse du modèle non exploitable");
+
+    const analyse = JSON.parse(correspondance[0]);
+    const notes = {};
+    for (const note of analyse.notes || []) {
+      notes[note.questionId] = {
+        score: Number(note.score) || 0,
+        criteresSatisfaits: note.criteresSatisfaits || [],
+        commentaire: note.commentaire || "",
+      };
+    }
+    return { source: "bedrock", notes };
+  } catch (e) {
+    // Repli signalé : sans cette trace, une panne du modèle produirait
+    // des scores qui passeraient pour une correction réelle.
+    console.error("Évaluation Bedrock indisponible, correction manuelle requise:", e.message);
+
+    const notes = {};
+    for (const e2 of elements) {
+      const longueur = String(e2.reponse || "").trim().length;
+      notes[e2.questionId] = {
+        score: longueur > 200 ? 50 : longueur > 50 ? 30 : 0,
+        criteresSatisfaits: [],
+        commentaire: "Correction automatique indisponible — relecture manuelle nécessaire",
+      };
+    }
+    return { source: "fallback", notes };
+  }
+}
+
+module.exports = { analyserCV, genererQuizIA, extraireTexteCV, evaluerReponsesOuvertes };

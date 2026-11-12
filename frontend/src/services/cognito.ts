@@ -57,6 +57,23 @@ async function appelCognito(cible: string, corps: unknown) {
 function traduireErreur(type?: string, message?: string): string {
   switch (type) {
     case 'NotAuthorizedException':
+      // Cognito réutilise ce type pour deux situations sans rapport :
+      // un mot de passe faux, et une session de défi expirée. Sans ce
+      // test, le salarié qui met trop longtemps à choisir son mot de
+      // passe lit « Adresse ou mot de passe incorrect » — et recommence
+      // à saisir une adresse qui n'a jamais été en cause.
+      if (/session/i.test(message ?? '')) {
+        return 'Session expirée. Reconnectez-vous avec le mot de passe reçu par courriel.';
+      }
+      // Cognito refuse de réinitialiser le mot de passe d'un compte
+      // encore en FORCE_CHANGE_PASSWORD. C'est exactement le cas d'un
+      // salarié invité qui n'a jamais activé son compte et clique sur
+      // « mot de passe oublié » : sans ce test, il lisait « adresse ou
+      // mot de passe incorrect », ce qui est faux et ne lui dit rien.
+      if (/current state/i.test(message ?? '')) {
+        return "Ce compte n'est pas encore activé. Connectez-vous avec le mot de "
+          + 'passe temporaire reçu par courriel, puis choisissez le vôtre.';
+      }
       return 'Adresse ou mot de passe incorrect';
     case 'UserNotFoundException':
       return 'Adresse ou mot de passe incorrect';
@@ -74,6 +91,12 @@ function traduireErreur(type?: string, message?: string): string {
       return 'Code de confirmation invalide';
     case 'ExpiredCodeException':
       return 'Code expiré. Demandez-en un nouveau.';
+    case 'InvalidParameterException':
+      if (/verified email|no registered/i.test(message ?? '')) {
+        return "Aucune adresse vérifiée n'est associée à ce compte. "
+          + 'Demandez aux ressources humaines de vous renvoyer une invitation.';
+      }
+      return message || "Donnée refusée par le service d'authentification";
     default:
       return message || 'Erreur d\'authentification';
   }
@@ -149,24 +172,94 @@ export function effacerJetons() {
 
 // ── Opérations ─────────────────────────────────────────────────────
 
-export async function connexion(email: string, motDePasse: string): Promise<UtilisateurCognito> {
-  const res = await appelCognito('InitiateAuth', {
-    AuthFlow: 'USER_PASSWORD_AUTH',
-    ClientId: CLIENT_ID,
-    AuthParameters: { USERNAME: email, PASSWORD: motDePasse },
-  });
+/**
+ * Ce que peut rendre une tentative de connexion.
+ *
+ * Un compte créé par la RH avec `AdminCreateUser` reçoit un mot de
+ * passe temporaire. À sa première connexion, Cognito ne renvoie PAS de
+ * jetons : il renvoie un défi `NEW_PASSWORD_REQUIRED` et une session.
+ * La version précédente lisait `AuthenticationResult`, le trouvait
+ * absent et levait « Authentification incomplète » — autrement dit,
+ * aucun salarié invité ne pouvait entrer.
+ */
+export type ResultatConnexion =
+  | { etat: 'connecte'; utilisateur: UtilisateurCognito }
+  | { etat: 'motDePasseAChoisir'; session: string; email: string };
 
-  const r = res.AuthenticationResult;
-  if (!r) throw new Error('Authentification incomplète');
-
+/** Enregistre les jetons d'une réponse d'authentification. */
+function accepterJetons(r: any): UtilisateurCognito {
   ecrireJetons({
     idToken: r.IdToken,
     accessToken: r.AccessToken,
     refreshToken: r.RefreshToken,
     expireLe: Date.now() + r.ExpiresIn * 1000,
   });
-
   return utilisateurDepuisJeton(r.IdToken);
+}
+
+export async function connexion(
+  email: string,
+  motDePasse: string,
+): Promise<ResultatConnexion> {
+  const res = await appelCognito('InitiateAuth', {
+    AuthFlow: 'USER_PASSWORD_AUTH',
+    ClientId: CLIENT_ID,
+    AuthParameters: { USERNAME: email, PASSWORD: motDePasse },
+  });
+
+  if (res.AuthenticationResult) {
+    return { etat: 'connecte', utilisateur: accepterJetons(res.AuthenticationResult) };
+  }
+
+  if (res.ChallengeName === 'NEW_PASSWORD_REQUIRED') {
+    // Cognito renvoie l'adresse réelle dans les paramètres du défi :
+    // c'est elle qu'attend `RespondToAuthChallenge`, et elle peut
+    // différer de ce qui a été saisi quand le pool est insensible à la
+    // casse.
+    let reelle = email;
+    try {
+      reelle = JSON.parse(res.ChallengeParameters?.userAttributes ?? '{}').email || email;
+    } catch { /* paramètres absents : l'adresse saisie fera l'affaire */ }
+
+    return { etat: 'motDePasseAChoisir', session: res.Session, email: reelle };
+  }
+
+  // Un autre défi — MFA, par exemple — n'est pas géré ici. Le dire
+  // plutôt que de laisser « Authentification incomplète », qui
+  // n'apprend rien à personne.
+  throw new Error(
+    res.ChallengeName
+      ? `Cette connexion demande une étape non prise en charge (${res.ChallengeName}).`
+      : 'Authentification incomplète',
+  );
+}
+
+/**
+ * Termine une première connexion en posant le mot de passe choisi.
+ *
+ * La session du défi ne vaut que quelques minutes et ne sert qu'une
+ * fois : passé ce délai, il faut se reconnecter avec le mot de passe
+ * temporaire pour en obtenir une nouvelle.
+ */
+export async function repondreDefi(
+  session: string,
+  email: string,
+  nouveauMotDePasse: string,
+): Promise<UtilisateurCognito> {
+  const res = await appelCognito('RespondToAuthChallenge', {
+    ClientId: CLIENT_ID,
+    ChallengeName: 'NEW_PASSWORD_REQUIRED',
+    Session: session,
+    ChallengeResponses: {
+      USERNAME: email,
+      NEW_PASSWORD: nouveauMotDePasse,
+    },
+  });
+
+  if (!res.AuthenticationResult) {
+    throw new Error("Le mot de passe n'a pas pu être enregistré. Reconnectez-vous.");
+  }
+  return accepterJetons(res.AuthenticationResult);
 }
 
 /** Inscription libre : réservée aux candidats, groupe attribué par Cognito */

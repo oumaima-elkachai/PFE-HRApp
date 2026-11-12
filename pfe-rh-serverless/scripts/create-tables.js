@@ -165,6 +165,67 @@ const SCHEMA = [
     pk: a("id"),
     index: [{ nom: "statut-date-index", pk: a("statut"), sk: a("dateDebut") }],
   }),
+
+    table({
+    base: "ProfilsCandidats",
+    pk: a("id"),
+    index: [{ nom: "email-index", pk: a("email") }],
+  }),
+    // Demandes d'attestations et certificats. Deux index : la file
+  // d'attente pour la RH, l'historique pour chaque employe.
+  table({
+    base: "DemandesDocuments",
+    pk: a("id"),
+    index: [
+      { nom: "employe-index", pk: a("employeId"), sk: a("demandeLe") },
+      { nom: "statut-index", pk: a("statut"), sk: a("demandeLe") },
+    ],
+  }),
+
+    table({
+    base: "NotesFrais",
+    pk: a("id"),
+    index: [
+      { nom: "employe-index", pk: a("employeId"), sk: a("creeLe") },
+      { nom: "statut-index", pk: a("statut"), sk: a("creeLe") },
+    ],
+  }),
+
+    {
+    TableName: "Messages-local",
+    // Clé composite : tous les messages d'une candidature sont
+    // contigus, et triés par date sans index supplémentaire.
+    KeySchema: [
+      { AttributeName: "candidatureId", KeyType: "HASH" },
+      { AttributeName: "envoyeLe", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "candidatureId", AttributeType: "S" },
+      { AttributeName: "envoyeLe", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "AlertesOffres-local",
+    KeySchema: [{ AttributeName: "id", KeyType: "HASH" }],
+    AttributeDefinitions: [{ AttributeName: "id", AttributeType: "S" }],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+
+  {
+  TableName: "Sites-local",
+  KeySchema: [{ AttributeName: "code", KeyType: "HASH" }],
+  AttributeDefinitions: [{ AttributeName: "code", AttributeType: "S" }],
+  BillingMode: "PAY_PER_REQUEST",
+},
+
+{
+  TableName: "Biometrie-local",
+  // Un gabarit par salarié : la clé seule suffit, pas de tri.
+  KeySchema: [{ AttributeName: "employeId", KeyType: "HASH" }],
+  AttributeDefinitions: [{ AttributeName: "employeId", AttributeType: "S" }],
+  BillingMode: "PAY_PER_REQUEST",
+}
 ];
 
 // Tables retirées du schéma :

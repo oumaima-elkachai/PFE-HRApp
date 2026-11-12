@@ -1,186 +1,254 @@
 // src/pages/candidate/MesCandidaturesPage.tsx
-import { useState, useEffect } from 'react';
+//
+// Suivi des candidatures côté candidat. L'écran répond à une seule
+// question : où en est mon dossier, et dois-je faire quelque chose ?
+//
+// ── Ce qui a changé ─────────────────────────────────────────────────
+//
+// 1. L'import de `SuiviCandidature` pointait sur `./SuiviCandidature`,
+//    donc sur ce dossier-ci. Le composant vit dans
+//    `components/candidat/`, où plusieurs pages le partagent.
+//
+// 2. La frise dépliée ne recevait pas `candidatureId`. Le bouton
+//    d'accès à la messagerie n'apparaissait donc jamais, et les
+//    échanges n'étaient atteignables que depuis une liste qui reste
+//    vide tant que personne n'a écrit.
+//
+// 3. Mise en page figée en dessous de 1024 px : en-tête sur une
+//    ligne, quatre onglets et un champ de recherche sur la même
+//    bande, grille d'informations à deux colonnes.
+
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Briefcase, Clock, CheckCircle, XCircle, FileText,
-  Video, MapPin, ChevronRight, Bell, ExternalLink,
-  ClipboardList, CalendarDays, Award,
+  Briefcase, Clock, CheckCircle, XCircle, FileText, Video, MapPin,
+  ChevronRight, Bell, ExternalLink, ClipboardList, CalendarDays,
+  Award, Search, X,
 } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
+import Pagination from '../../components/ui/Pagination';
+import { EnTete, Vide, Squelette, CARTE, ACCENT } from '../../components/ui/kit';
 import { candidatsService } from '../../services/candidats';
+import { notificationsService } from '../../services/notifications';
 import { useAuth } from '../../context/AuthContext';
 import type { Candidat, Notification as Notif } from '../../types';
-import { notificationsService } from '@/services/notifications';
+import { STYLES_ANIMATION } from '../../utils/animations';
+import SuiviCandidature from './SuiviCandidature';
 
-// ── Config statuts (simplifié pour candidat) ──
-const statutDisplay: Record<string, {
-  label: string;
-  color: string;
-  bg: string;
-  icon: React.ComponentType<{ className?: string }>;
+const PAR_PAGE = 5;
+
+// Style uniquement : les états que le candidat doit distinguer.
+const STYLE_STATUT: Record<string, {
+  libelle: string; bg: string; text: string;
+  icone: React.ComponentType<{ className?: string }>;
 }> = {
-  SOUMIS:          { label: 'Candidature soumise',   color: 'text-blue-600',     bg: 'bg-blue-50',      icon: FileText },
-  PRESELECTION:    { label: 'En cours d\'analyse',   color: 'text-amber-600',    bg: 'bg-amber-50',     icon: Clock },
-  QUIZ_EN_ATTENTE: { label: 'Quiz disponible',       color: 'text-indigo-600',   bg: 'bg-indigo-50',    icon: ClipboardList },
-  QUIZ_COMPLETE:   { label: 'Quiz complété',         color: 'text-cyan-600',     bg: 'bg-cyan-50',      icon: CheckCircle },
-  ENTRETIEN:       { label: 'Entretien planifié',    color: 'text-purple-600',   bg: 'bg-purple-50',    icon: CalendarDays },
-  OFFRE:           { label: 'Offre reçue 🎉',       color: 'text-[#2d6a4f]',    bg: 'bg-[#d8f3dc]',    icon: Award },
-  EMBAUCHE:        { label: 'Embauché 🎉',          color: 'text-[#2d6a4f]',    bg: 'bg-[#d8f3dc]',    icon: CheckCircle },
-  REFUSE:          { label: 'Non retenu',            color: 'text-red-500',      bg: 'bg-red-50',       icon: XCircle },
+  SOUMIS:          { libelle: 'Candidature soumise', bg: 'bg-blue-50',      text: 'text-blue-600',    icone: FileText },
+  PRESELECTION:    { libelle: "En cours d'analyse",  bg: 'bg-amber-50',     text: 'text-amber-600',   icone: Clock },
+  QUIZ_EN_ATTENTE: { libelle: 'Quiz disponible',     bg: 'bg-brand-500/10', text: 'text-brand-texte', icone: ClipboardList },
+  QUIZ_ENVOYE:     { libelle: 'Quiz disponible',     bg: 'bg-brand-500/10', text: 'text-brand-texte', icone: ClipboardList },
+  QUIZ_TERMINE:    { libelle: 'Quiz complété',       bg: 'bg-blue-50',      text: 'text-blue-600',    icone: CheckCircle },
+  ENTRETIEN:       { libelle: 'Entretien planifié',  bg: 'bg-purple-50',    text: 'text-purple-600',  icone: CalendarDays },
+  OFFRE:           { libelle: 'Offre reçue',         bg: 'bg-brand-500/10', text: 'text-brand-texte', icone: Award },
+  EMBAUCHE:        { libelle: 'Embauché',            bg: 'bg-brand-500/10', text: 'text-brand-texte', icone: CheckCircle },
+  REFUSE:          { libelle: 'Non retenu',          bg: 'bg-red-50',       text: 'text-red-500',     icone: XCircle },
 };
 
-// ── Bannière Notification ─────────────────────
-function NotificationBanner({ notifications, onDismiss }: {
+const styleStatut = (s: string) =>
+  STYLE_STATUT[s] ?? { libelle: 'En cours', bg: 'bg-stone-100', text: 'text-stone-500', icone: Clock };
+
+// Les deux statuts de quiz appellent une action du candidat. Le
+// filtre testait QUIZ_COMPLETE, un statut qui n'existe pas : un
+// dossier au quiz terminé disparaissait de toutes les catégories.
+const ACTION_REQUISE = ['QUIZ_EN_ATTENTE', 'QUIZ_ENVOYE'];
+const TERMINE = ['EMBAUCHE', 'REFUSE', 'OFFRE'];
+const EN_COURS = ['SOUMIS', 'PRESELECTION', 'QUIZ_TERMINE', 'ENTRETIEN'];
+
+const formaterDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('fr-FR', {
+    day: 'numeric', month: 'long', year: 'numeric',
+  });
+
+// ── Bandeau de notifications ───────────────────────────────────────
+
+function BanniereNotifications({ notifications, onFermer }: {
   notifications: Notif[];
-  onDismiss: (id: string) => void;
+  onFermer: (id: string) => void;
 }) {
-  const unread = notifications.filter(n => !n.lu);
-  if (unread.length === 0) return null;
+  const nonLues = notifications.filter((n) => !n.lu);
+  if (nonLues.length === 0) return null;
+
+  const STYLE: Record<string, { bg: string; bord: string; icone: string; texte: string }> = {
+    ENTRETIEN_PLANIFIE: { bg: 'bg-purple-50',    bord: 'border-purple-200',    icone: 'bg-purple-100 text-purple-600',       texte: 'text-purple-700' },
+    QUIZ_DISPONIBLE:    { bg: 'bg-brand-500/10', bord: 'border-brand-500/25',  icone: 'bg-brand-500/15 text-brand-texte',    texte: 'text-brand-texte' },
+    OFFRE_RECUE:        { bg: 'bg-brand-500/10', bord: 'border-brand-500/25',  icone: 'bg-brand-500/15 text-brand-texte',    texte: 'text-brand-texte' },
+  };
+  const defaut = { bg: 'bg-blue-50', bord: 'border-blue-200', icone: 'bg-blue-100 text-blue-600', texte: 'text-blue-700' };
 
   return (
-    <div className="space-y-3 mb-6">
-      {unread.map(n => (
-        <div key={n.id}
-          className={`flex items-start gap-3 p-4 rounded-2xl border ${
-            n.type === 'ENTRETIEN_PLANIFIE'
-              ? 'bg-purple-50 border-purple-200'
-              : n.type === 'QUIZ_DISPONIBLE'
-                ? 'bg-indigo-50 border-indigo-200'
-                : n.type === 'OFFRE_RECUE'
-                  ? 'bg-[#d8f3dc] border-[#2d6a4f]/20'
-                  : 'bg-blue-50 border-blue-200'
-          }`}
-        >
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-            n.type === 'ENTRETIEN_PLANIFIE' ? 'bg-purple-100' :
-            n.type === 'QUIZ_DISPONIBLE'    ? 'bg-indigo-100' :
-            n.type === 'OFFRE_RECUE'        ? 'bg-[#b7e4c7]' : 'bg-blue-100'
-          }`}>
-            <Bell className="w-4 h-4 text-current" />
+    <div className="space-y-2.5 mb-6">
+      {nonLues.map((n) => {
+        const style = STYLE[n.type] ?? defaut;
+        return (
+          <div
+            key={n.id}
+            className={`hrup-monter flex items-start gap-3 p-4 rounded-2xl border ${style.bg} ${style.bord}`}
+          >
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${style.icone}`}>
+              <Bell className="w-4 h-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`text-sm font-bold ${style.texte}`}>{n.titre}</p>
+              <p className="text-xs text-stone-500 mt-0.5">{n.message}</p>
+            </div>
+            <button
+              onClick={() => onFermer(n.id)}
+              aria-label="Masquer"
+              className="p-1 rounded-lg hover:bg-surface/60 shrink-0 transition-colors"
+            >
+              <X className="w-3.5 h-3.5 text-stone-400" />
+            </button>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-[#1a1a1a]">{n.titre}</p>
-            <p className="text-xs text-[#6b7280] mt-0.5">{n.message}</p>
-          </div>
-          <button onClick={() => onDismiss(n.id)}
-            className="text-[#9ca3af] hover:text-[#6b7280] shrink-0 mt-1">
-            <XCircle className="w-4 h-4" />
-          </button>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-// ── Card Candidature (vue candidat) ───────────
-function CandidatureCard({ candidat }: { candidat: Candidat }) {
-  const [expanded, setExpanded] = useState(false);
+// ── Carte d'une candidature ────────────────────────────────────────
+
+function CarteCandidature({ candidat, delai }: { candidat: Candidat; delai: number }) {
+  const [deplie, setDeplie] = useState(false);
   const navigate = useNavigate();
-  const config = statutDisplay[candidat.statut] ?? statutDisplay['SOUMIS'];
-  const Icon = config.icon;
 
-  const titrePoste = candidat.offreTitre || candidat.posteVise || 'Poste';
-  const dateStr    = candidat.soumisLe || new Date().toISOString();
+  const style = styleStatut(candidat.statut);
+  const Icone = style.icone;
 
-  const formatDate = (iso: string) =>
-    new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  const titrePoste = candidat.offreTitre || candidat.posteVise || 'Candidature spontanée';
+  const agir = ACTION_REQUISE.includes(candidat.statut);
 
   return (
-    <div className="bg-white rounded-2xl border border-[#e5e0d8] overflow-hidden hover:shadow-sm transition-shadow">
+    <div
+      style={{ animationDelay: `${delai}ms` }}
+      className={`hrup-monter bg-surface rounded-2xl shadow-sm border overflow-hidden transition-shadow hover:shadow-md ${
+        agir ? 'border-brand-500/40' : 'border-stone-100'
+      }`}
+    >
       <div className="p-5">
-        {/* ── Header: Poste + Statut ── */}
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 bg-[#f5f0e8] rounded-xl flex items-center justify-center shrink-0">
-              <Briefcase className="w-5 h-5 text-[#2d6a4f]" />
+
+        <div className="flex items-start justify-between gap-3 mb-4 flex-wrap">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 bg-brand-500/10">
+              <Briefcase className="w-5 h-5 text-brand-texte" />
             </div>
-            <div>
-              <h3 className="font-semibold text-[#1a1a1a] text-[15px]">{titrePoste}</h3>
+            <div className="min-w-0">
+              <h3 className="font-bold text-stone-800 text-[15px] truncate">{titrePoste}</h3>
               {candidat.offreDepartement && (
-                <p className="text-xs text-[#9ca3af]">{candidat.offreDepartement}</p>
+                <p className="text-xs text-brand-texte font-semibold">
+                  {candidat.offreDepartement}
+                </p>
               )}
-              <p className="text-xs text-[#9ca3af] mt-0.5">
-                Postulé le {formatDate(dateStr)}
+              <p className="text-[10px] text-stone-400 mt-0.5">
+                Déposée le {formaterDate(candidat.creeLe)}
               </p>
             </div>
           </div>
 
-          <span className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full shrink-0 ${config.bg} ${config.color}`}>
-            <Icon className="w-3.5 h-3.5" />
-            {config.label}
+          <span className={`flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full shrink-0 whitespace-nowrap ${style.bg} ${style.text}`}>
+            <Icone className="w-3 h-3 shrink-0" />
+            {style.libelle}
           </span>
         </div>
 
-        {/* ── Alerte Quiz disponible ── */}
-        {candidat.statut === 'QUIZ_EN_ATTENTE' && (
-          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 mb-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ClipboardList className="w-4 h-4 text-indigo-600" />
-                <div>
-                  <p className="text-sm font-semibold text-indigo-700">Quiz technique disponible</p>
-                  <p className="text-xs text-indigo-500">Complétez le quiz pour avancer dans le processus</p>
+        {/* Frise compacte : le candidat voit d'un coup d'œil où en
+            est son dossier, sans déplier. */}
+        <div className="mb-4">
+          <SuiviCandidature
+            statut={candidat.statut}
+            historique={candidat.historiqueStatuts}
+            compact
+          />
+        </div>
+
+        {agir && (
+          <div className="bg-brand-500/10 border border-brand-500/25 rounded-xl p-3.5 mb-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <ClipboardList className="w-4 h-4 text-brand-texte shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-brand-texte">
+                    Quiz technique disponible
+                  </p>
+                  <p className="text-xs text-stone-500">
+                    Complétez-le pour avancer dans le processus
+                  </p>
                 </div>
               </div>
               <button
-              onClick={() => navigate(`/candidat/quiz/${candidat.quizId}`)}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1"
+                onClick={() => navigate(`/candidat/quiz/${candidat.quizId}`)}
+                className="bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors flex items-center gap-1.5 shrink-0"
               >
-                Passer le Quiz
+                Passer le quiz
                 <ExternalLink className="w-3 h-3" />
               </button>
             </div>
           </div>
         )}
 
-        {/* ── Score Quiz (si complété) ── */}
-        {candidat.quizResult && (
-          <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-3 mb-3">
-            <div className="flex items-center gap-2">
-              <Award className="w-4 h-4 text-cyan-600" />
-              <p className="text-sm font-medium text-cyan-700">
-                Quiz complété — Score : {candidat.quizResult.scoreQuiz}/100
+        {candidat.scoreQuiz != null && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Award className="w-4 h-4 text-blue-600 shrink-0" />
+              <p className="text-sm font-medium text-blue-700">
+                Quiz complété — {candidat.scoreQuiz}/100
               </p>
-              <span className="text-xs text-cyan-500 ml-auto">
-                {candidat.quizResult.bonnesReponses}/{candidat.quizResult.totalQuestions} bonnes réponses
-              </span>
+              {candidat.scoreTotal != null && (
+                <span className="text-xs text-blue-600 sm:ms-auto">
+                  Score global {candidat.scoreTotal}/100
+                </span>
+              )}
             </div>
           </div>
         )}
 
-        {/* ── Entretien planifié ── */}
         {candidat.statut === 'ENTRETIEN' && candidat.entretien && (
           <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 mb-3">
             <div className="flex items-start gap-3">
-              <div className="w-9 h-9 bg-purple-100 rounded-lg flex items-center justify-center shrink-0">
+              <div className="w-9 h-9 bg-purple-100 rounded-xl flex items-center justify-center shrink-0">
                 {candidat.entretien.type === 'en_ligne'
                   ? <Video className="w-4 h-4 text-purple-600" />
-                  : <MapPin className="w-4 h-4 text-purple-600" />
-                }
+                  : <MapPin className="w-4 h-4 text-purple-600" />}
               </div>
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-purple-800">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-purple-800">
                   Entretien {candidat.entretien.type === 'en_ligne' ? 'en ligne' : 'sur site'}
                 </p>
                 <p className="text-xs text-purple-600 mt-1">
-                  📅 {formatDate(candidat.entretien.date)} à {candidat.entretien.heure}
+                  {formaterDate(candidat.entretien.date)} à {candidat.entretien.heure}
                 </p>
+
                 {candidat.entretien.type === 'en_ligne' && candidat.entretien.lien && (
-                  <a href={candidat.entretien.lien} target="_blank" rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-purple-700 bg-purple-100 px-2.5 py-1 rounded-lg mt-2 hover:bg-purple-200 transition-colors font-medium">
+                  <a
+                    href={candidat.entretien.lien}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-purple-700 bg-purple-100 px-3 py-1.5 rounded-xl mt-2 hover:bg-purple-200 transition-colors"
+                  >
                     <Video className="w-3 h-3" />
                     Rejoindre la visioconférence
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 )}
+
                 {candidat.entretien.type === 'sur_site' && candidat.entretien.adresse && (
-                  <p className="text-xs text-purple-600 mt-1">
-                    📍 {candidat.entretien.adresse}
+                  <p className="text-xs text-purple-600 mt-1 flex items-start gap-1">
+                    <MapPin className="w-3 h-3 mt-0.5 shrink-0" />
+                    {candidat.entretien.adresse}
                   </p>
                 )}
+
                 {candidat.entretien.notes && (
-                  <p className="text-xs text-purple-500 mt-1 italic">
-                    💬 {candidat.entretien.notes}
+                  <p className="text-xs text-purple-500 mt-1.5 italic">
+                    {candidat.entretien.notes}
                   </p>
                 )}
               </div>
@@ -188,52 +256,70 @@ function CandidatureCard({ candidat }: { candidat: Candidat }) {
           </div>
         )}
 
-        {/* ── Offre reçue ── */}
         {candidat.statut === 'OFFRE' && (
-          <div className="bg-[#d8f3dc] border border-[#2d6a4f]/20 rounded-xl p-4 mb-3 text-center">
-            <p className="text-lg mb-1">🎉</p>
-            <p className="text-sm font-semibold text-[#2d6a4f]">
-              Félicitations ! Vous avez reçu une offre
+          <div className="bg-brand-500/10 border border-brand-500/25 rounded-xl p-4 mb-3 text-center">
+            <Award className="w-6 h-6 mx-auto mb-2 text-brand-texte" />
+            <p className="text-sm font-bold text-brand-texte">
+              Vous avez reçu une offre
             </p>
-            <p className="text-xs text-[#2d6a4f]/70 mt-1">
-              L'équipe RH vous contactera bientôt avec les détails
+            <p className="text-xs text-stone-500 mt-1">
+              L'équipe de recrutement vous contactera avec les détails
             </p>
           </div>
         )}
 
-        {/* ── Infos soumises (expandable) ── */}
         <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1 text-xs text-[#2d6a4f] font-medium hover:underline mt-1"
+          onClick={() => setDeplie(!deplie)}
+          className="flex items-center gap-1 text-xs font-bold text-brand-texte hover:underline"
         >
-          {expanded ? 'Masquer mes informations' : 'Voir mes informations'}
-          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          {deplie ? 'Masquer le détail' : 'Voir le détail'}
+          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${deplie ? 'rotate-90' : ''}`} />
         </button>
       </div>
 
-      {/* ── Détails expandés ── */}
-      {expanded && (
-        <div className="border-t border-[#f0ebe0] px-5 py-4 bg-[#fafaf8] space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { l: 'Email',       v: candidat.email },
-              { l: 'Téléphone',   v: candidat.telephone || '—' },
-              { l: 'Niveau',      v: candidat.niveauEtude || '—' },
-              { l: 'Expérience',  v: candidat.experience || '—' },
-            ].map(({ l, v }) => (
-              <div key={l} className="bg-white rounded-xl p-3 border border-[#e5e0d8]">
-                <div className="text-[10px] text-[#9ca3af] uppercase tracking-wider mb-1">{l}</div>
-                <div className="text-sm font-medium text-[#1a1a1a]">{v}</div>
+      {deplie && (
+        <div className="border-t border-stone-100 px-5 py-4 bg-stone-50 space-y-4">
+
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 mb-3">
+              Parcours de votre candidature
+            </p>
+            {/* candidatureId donne accès à la messagerie : sans lui,
+                le bouton n'apparaissait jamais. */}
+            <SuiviCandidature
+              statut={candidat.statut}
+              historique={candidat.historiqueStatuts}
+              candidatureId={candidat.id}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {([
+              ['Adresse', candidat.email],
+              ['Téléphone', candidat.telephone || '—'],
+              ['Niveau', candidat.niveauEtude || '—'],
+              ['Expérience', candidat.experience || '—'],
+            ] as [string, string][]).map(([libelle, valeur]) => (
+              <div key={libelle} className="bg-surface rounded-xl p-3 border border-stone-100">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1">
+                  {libelle}
+                </div>
+                <div className="text-sm font-medium text-stone-800 truncate">{valeur}</div>
               </div>
             ))}
           </div>
 
-          {candidat.competences?.length > 0 && (
+          {(candidat.competences?.length ?? 0) > 0 && (
             <div>
-              <p className="text-[10px] text-[#9ca3af] uppercase tracking-wider mb-2">Compétences</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 mb-2">
+                Compétences
+              </p>
               <div className="flex gap-1.5 flex-wrap">
                 {candidat.competences.map((c, i) => (
-                  <span key={i} className="text-xs bg-[#d8f3dc] text-[#2d6a4f] px-2.5 py-1 rounded-full font-medium">
+                  <span
+                    key={`${c}-${i}`}
+                    className="text-xs font-bold bg-brand-500/10 text-brand-texte px-2.5 py-1 rounded-full"
+                  >
                     {c}
                   </span>
                 ))}
@@ -243,15 +329,17 @@ function CandidatureCard({ candidat }: { candidat: Candidat }) {
 
           {candidat.lettreMotivation && (
             <div>
-              <p className="text-[10px] text-[#9ca3af] uppercase tracking-wider mb-2">Lettre de motivation</p>
-              <p className="text-xs text-[#374151] bg-white rounded-xl p-3 border border-[#e5e0d8] leading-relaxed">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 mb-2">
+                Lettre de motivation
+              </p>
+              <p className="text-xs text-stone-600 bg-surface rounded-xl p-3 border border-stone-100 leading-relaxed whitespace-pre-wrap">
                 {candidat.lettreMotivation}
               </p>
             </div>
           )}
 
           {candidat.cvFileName && (
-            <div className="flex items-center gap-2 text-xs text-[#2d6a4f] bg-[#d8f3dc] px-3 py-2 rounded-xl w-fit">
+            <div className="flex items-center gap-2 text-xs font-bold text-brand-texte bg-brand-500/10 px-3 py-2 rounded-xl w-fit">
               <FileText className="w-3.5 h-3.5" />
               {candidat.cvFileName}
             </div>
@@ -262,23 +350,32 @@ function CandidatureCard({ candidat }: { candidat: Candidat }) {
   );
 }
 
-// ── Page principale candidat ──────────────────
+// ── Page ───────────────────────────────────────────────────────────
+
+type Filtre = 'tous' | 'encours' | 'action' | 'termine';
+
 export default function MesCandidaturesPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [candidatures,  setCandidatures]  = useState<Candidat[]>([]);
+
+  const [candidatures, setCandidatures] = useState<Candidat[]>([]);
   const [notifications, setNotifications] = useState<Notif[]>([]);
-  const [loading,       setLoading]       = useState(true);
-  const [filter,        setFilter]        = useState('Tous');
+  const [chargement, setChargement] = useState(true);
+  const [filtre, setFiltre] = useState<Filtre>('tous');
+  const [recherche, setRecherche] = useState('');
+  const [page, setPage] = useState(0);
 
-  const filters = ['Tous', 'En cours', 'Action requise', 'Terminé'];
+  // On dépend de l'identifiant, pas de l'objet. Selon la façon dont
+  // le contexte est construit, `user` peut être recréé à chaque
+  // rendu : l'effet se relancerait alors sans fin, et la page
+  // resterait bloquée sur « Chargement… ».
+  const idUtilisateur = (user as any)?.sub ?? (user as any)?.email ?? null;
 
-  // ── Chargement ──
   useEffect(() => {
-    const charger = async () => {
+    (async () => {
       try {
-        setLoading(true);
-        if (!user) return;
+        setChargement(true);
+        if (!idUtilisateur) return;
 
         const [resCand, resNotif] = await Promise.allSettled([
           candidatsService.mesCandidatures(),
@@ -292,130 +389,169 @@ export default function MesCandidaturesPage() {
           setNotifications((resNotif.value as any)?.data?.notifications ?? []);
         }
       } catch (e) {
-        console.error(e);
+        console.error('Chargement des candidatures :', e);
       } finally {
-        setLoading(false);
+        setChargement(false);
       }
-    };
-    charger();
-  }, [user]);
+    })();
+  }, [idUtilisateur]);
 
-  // ── Marquer notification lue ──
-  const dismissNotif = async (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, lu: true } : n));
-    try { await notificationsService.marquerLue(id); } catch {}
+  useEffect(() => { setPage(0); }, [filtre, recherche]);
+
+  const fermerNotif = async (id: string) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, lu: true } : n)));
+    try { await notificationsService.marquerLue(id); } catch { /* sans incidence */ }
   };
 
-  // ── Filtres ──
-  const filtered = candidatures.filter(c => {
-    if (filter === 'En cours')
-      return ['SOUMIS', 'PRESELECTION', 'QUIZ_COMPLETE', 'ENTRETIEN'].includes(c.statut);
-    if (filter === 'Action requise')
-      return c.statut === 'QUIZ_EN_ATTENTE';
-    if (filter === 'Terminé')
-      return ['EMBAUCHE', 'REFUSE', 'OFFRE'].includes(c.statut);
-    return true;
-  });
+  const filtrees = useMemo(() => {
+    const terme = recherche.trim().toLowerCase();
+    return candidatures
+      .filter((c) => {
+        if (filtre === 'encours' && !EN_COURS.includes(c.statut)) return false;
+        if (filtre === 'action' && !ACTION_REQUISE.includes(c.statut)) return false;
+        if (filtre === 'termine' && !TERMINE.includes(c.statut)) return false;
+        if (!terme) return true;
+        return `${c.offreTitre ?? ''} ${c.posteVise ?? ''} ${c.offreDepartement ?? ''}`
+          .toLowerCase().includes(terme);
+      })
+      // Ce qui demande une action remonte, puis le plus récent.
+      .sort((a, b) => {
+        const aA = ACTION_REQUISE.includes(a.statut) ? 0 : 1;
+        const bA = ACTION_REQUISE.includes(b.statut) ? 0 : 1;
+        if (aA !== bA) return aA - bA;
+        return String(b.creeLe).localeCompare(String(a.creeLe));
+      });
+  }, [candidatures, filtre, recherche]);
 
-  // ── Stats ──
-  const stats = {
-    total:    candidatures.length,
-    enCours:  candidatures.filter(c => !['EMBAUCHE','REFUSE','OFFRE'].includes(c.statut)).length,
-    action:   candidatures.filter(c => c.statut === 'QUIZ_EN_ATTENTE').length,
-    termine:  candidatures.filter(c => ['EMBAUCHE','REFUSE','OFFRE'].includes(c.statut)).length,
+  const pageCourante = useMemo(
+    () => filtrees.slice(page * PAR_PAGE, (page + 1) * PAR_PAGE),
+    [filtrees, page]
+  );
+
+  const compte = {
+    tous: candidatures.length,
+    encours: candidatures.filter((c) => EN_COURS.includes(c.statut)).length,
+    action: candidatures.filter((c) => ACTION_REQUISE.includes(c.statut)).length,
+    termine: candidatures.filter((c) => TERMINE.includes(c.statut)).length,
   };
+
+  const ONGLETS: [Filtre, string][] = [
+    ['tous', 'Toutes'],
+    ['encours', 'En cours'],
+    ['action', 'Action requise'],
+    ['termine', 'Terminées'],
+  ];
 
   return (
-    <Layout searchPlaceholder="Rechercher...">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-[#1a1a1a]">Mes Candidatures</h1>
-          <p className="text-sm text-[#6b7280] mt-0.5">
-            Suivez l'état de vos candidatures et actions requises
-          </p>
-        </div>
+    <div className="min-h-screen">
+      <Layout searchPlaceholder="Rechercher une candidature…">
 
-        {/* Notifications */}
-        <NotificationBanner notifications={notifications} onDismiss={dismissNotif} />
-
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-3 mb-6">
-          {[
-            { label: 'Total',           value: stats.total,   emoji: '📋', color: 'bg-[#f5f0e8]' },
-            { label: 'En cours',        value: stats.enCours, emoji: '⏳', color: 'bg-blue-50'   },
-            { label: 'Action requise',  value: stats.action,  emoji: '⚡', color: 'bg-indigo-50' },
-            { label: 'Terminé',         value: stats.termine, emoji: '✅', color: 'bg-[#d8f3dc]' },
-          ].map(s => (
-            <div key={s.label} className={`${s.color} rounded-2xl p-4 text-center`}>
-              <div className="text-2xl mb-1">{s.emoji}</div>
-              <div className="text-xl font-bold text-[#1a1a1a]">{s.value}</div>
-              <div className="text-xs text-[#6b7280] font-medium">{s.label}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Filtres */}
-        <div className="flex items-center gap-1 bg-white border border-[#e5e0d8] rounded-xl p-1 w-fit mb-6">
-          {filters.map(f => (
-            <button key={f}
-              onClick={() => setFilter(f)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                filter === f
-                  ? 'bg-[#2d6a4f] text-white shadow-sm'
-                  : 'text-[#6b7280] hover:text-[#374151]'
-              }`}
-            >
-              {f}
-              {f === 'Action requise' && stats.action > 0 && (
-                <span className="ml-1.5 bg-white/30 text-white text-[10px] px-1.5 py-0.5 rounded-full">
-                  {stats.action}
+        <EnTete
+          fil={['Mon suivi', 'Mes candidatures']}
+          titre="Mes candidatures"
+          sousTitre={chargement ? 'Chargement…' : (
+            <>
+              {filtrees.length} candidature{filtrees.length > 1 ? 's' : ''} sur {compte.tous}
+              {compte.action > 0 && (
+                <span className="text-brand-texte font-semibold">
+                  {' · '}{compte.action} action{compte.action > 1 ? 's' : ''} requise
+                  {compte.action > 1 ? 's' : ''}
                 </span>
               )}
-            </button>
-          ))}
+            </>
+          )}
+        />
+
+        <div className="px-4 sm:px-8 py-6 sm:py-8">
+
+          <BanniereNotifications notifications={notifications} onFermer={fermerNotif} />
+
+          {/* ── Onglets et recherche ── */}
+          <div className={`flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 ${CARTE} p-2 mb-5`}>
+            <div className="flex items-center gap-1 flex-wrap">
+              {ONGLETS.map(([cle, libelle]) => (
+                <button
+                  key={cle}
+                  onClick={() => setFiltre(cle)}
+                  className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg text-sm font-bold transition-colors ${
+                    filtre === cle ? 'bg-brand-500 text-white' : 'text-stone-500 hover:bg-stone-50'
+                  }`}
+                >
+                  {libelle}
+                  <span className={`text-[10px] px-1.5 rounded-full ${
+                    filtre === cle ? 'bg-white/25' : 'bg-stone-100'
+                  }`}>
+                    {chargement ? '…' : compte[cle]}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="relative w-full lg:w-64 shrink-0">
+              <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
+              <input
+                value={recherche}
+                onChange={(e) => setRecherche(e.target.value)}
+                placeholder="Poste, département…"
+                className="w-full ps-9 pe-8 py-2 rounded-lg border border-stone-200 text-sm bg-stone-50 focus:outline-none focus:border-brand-500 focus:bg-surface transition-colors"
+              />
+              {recherche && (
+                <button
+                  onClick={() => setRecherche('')}
+                  aria-label="Effacer la recherche"
+                  className="absolute end-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-md hover:bg-stone-200"
+                >
+                  <X className="w-3.5 h-3.5 text-stone-400" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ── Liste ── */}
+          {chargement ? (
+            <Squelette nombre={3} hauteur="h-40" />
+          ) : filtrees.length === 0 ? (
+            <Vide
+              icone={Briefcase}
+              message="Aucune candidature"
+              detail={recherche ? `Aucun résultat pour « ${recherche} »`
+                : filtre !== 'tous' ? 'Aucune candidature dans cette catégorie'
+                : "Vous n'avez pas encore postulé."}
+              action={filtre === 'tous' && !recherche && (
+                <button
+                  onClick={() => navigate('/candidat/offres')}
+                  className="bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-colors"
+                >
+                  Voir les offres disponibles
+                </button>
+              )}
+            />
+          ) : (
+            <>
+              <div className="space-y-4">
+                {pageCourante.map((c, i) => (
+                  <CarteCandidature key={c.id} candidat={c} delai={i * 60} />
+                ))}
+              </div>
+
+              {filtrees.length > PAR_PAGE && (
+                <div className={`${CARTE} mt-4 overflow-hidden`}>
+                  <Pagination
+                    page={page}
+                    taillePage={PAR_PAGE}
+                    total={filtrees.length}
+                    onPage={setPage}
+                    libelle="candidature"
+                    accent={ACCENT}
+                  />
+                </div>
+              )}
+            </>
+          )}
         </div>
 
-        {/* Liste */}
-        {loading ? (
-          <div className="space-y-4">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="bg-white rounded-2xl border border-[#e5e0d8] p-5 animate-pulse">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-11 h-11 bg-gray-100 rounded-xl" />
-                  <div className="space-y-2 flex-1">
-                    <div className="h-4 bg-gray-100 rounded w-48" />
-                    <div className="h-3 bg-gray-100 rounded w-28" />
-                  </div>
-                  <div className="h-6 bg-gray-100 rounded-full w-28" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-2xl border border-[#e5e0d8]">
-            <div className="text-5xl mb-4">📋</div>
-            <h3 className="font-semibold text-[#1a1a1a] mb-2">Aucune candidature</h3>
-            <p className="text-sm text-[#6b7280] mb-4">
-              {filter !== 'Tous'
-                ? 'Aucune candidature dans cette catégorie'
-                : "Vous n'avez pas encore postulé à des offres"}
-            </p>
-            {filter === 'Tous' && (
-              <button
-                onClick={() => navigate('/offres')}
-                className="bg-[#2d6a4f] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-[#1b4332] transition-colors"
-              >
-                Voir les offres disponibles
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {filtered.map(c => <CandidatureCard key={c.id} candidat={c} />)}
-          </div>
-        )}
-      </div>
-    </Layout>
+        <style>{STYLES_ANIMATION}</style>
+      </Layout>
+    </div>
   );
 }

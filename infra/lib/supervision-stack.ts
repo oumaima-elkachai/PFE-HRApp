@@ -53,7 +53,7 @@ export class SupervisionStack extends Stack {
     // de la pile, il faut cliquer sur le lien qu'il contient.
     this.sujetAlertes = new Topic(this, "SujetAlertes", {
       topicName: nommer(etape.nom, "alertes"),
-      displayName: `TERRA HR — alertes (${etape.nom})`,
+      displayName: `HR UP — alertes (${etape.nom})`,
     });
 
     this.sujetAlertes.addSubscription(new EmailSubscription(etape.emailAlertes));
@@ -176,7 +176,7 @@ export class SupervisionStack extends Stack {
     this.tableauDeBord.addWidgets(
       new TextWidget({
         markdown: [
-          `# TERRA HR — supervision (${etape.nom})`,
+          `# HR UP — supervision (${etape.nom})`,
           "",
           "Application RH serverless. Aucune ressource ne tourne en continu :",
           "les graphiques restent plats en l'absence de trafic, ce qui est le",

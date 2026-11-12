@@ -1,0 +1,772 @@
+/* src/theme.css
+ *
+ * Palette, typographie et mode sombre de HR UP, d'après le système
+ * « Luminous HR Executive » : obsidienne, indigo royal vers violet
+ * électrique, or impérial et émeraude.
+ *
+ * ── Le principe ────────────────────────────────────────────────────
+ *
+ * Tailwind v4 compile « bg-stone-800 » en
+ * « background-color: var(--color-stone-800) ». Une classe ne porte
+ * donc pas une couleur, elle porte une RÉFÉRENCE à une couleur.
+ * Redéfinir ces variables repeint l'application entière sans modifier
+ * une seule page — c'est ce qui rend ce changement d'identité
+ * possible à quelques jours de l'échéance.
+ *
+ * ── Portée, et sa limite ───────────────────────────────────────────
+ *
+ * Ce levier n'agit que sur les classes de palette. Les classes à
+ * valeur littérale — bg-[#4a7c59] — sont compilées en couleur fixe et
+ * lui échappent. C'est le travail de migrer-surfaces.js, à passer
+ * AVANT ce fichier : sans lui, une partie de l'interface reste dans
+ * l'ancienne palette et ne bascule pas en mode sombre.
+ *
+ * ── Deux corrections apportées à la maquette ───────────────────────
+ *
+ * L'émeraude #10B981 et l'or #F59E0B du système sont superbes sur
+ * l'obsidienne — 7,55 et 8,92 — mais ne donnent que 2,8 et 2,2 en
+ * texte sur fond blanc. Ils sont donc assombris EN MODE CLAIR
+ * seulement, et gardent leurs valeurs d'origine en sombre.
+ *
+ * Les rampes d'accent — bleu, vert, ambre, rouge — s'INVERSENT comme
+ * la rampe neutre. C'est ce qui fait qu'une pastille écrite
+ * « bg-amber-50 text-amber-700 » devient d'elle-même fond sombre et
+ * texte clair, sans toucher à la page. Le choix vient d'un comptage :
+ * « text-blue-600 » apparaît 88 fois dans l'application, « bg-blue-600 »
+ * une seule — cette famille y est une couleur de texte, pas de bouton.
+ *
+ * Seule la rampe « brand-* » reste fixe, pour les boutons remplis :
+ * ils portent du texte blanc, et l'éclaircir le rendrait illisible.
+ *
+ * ── Pourquoi les valeurs sombres sont déclarées une seule fois ─────
+ *
+ * Le mode sombre a deux déclencheurs : le choix de l'utilisateur et la
+ * préférence du système. Écrire les couleurs dans les deux blocs les
+ * ferait fatalement divergeur — une correction appliquée d'un seul
+ * côté donne un thème qui change selon la façon dont il a été activé,
+ * ce qui est presque introuvable. Les valeurs vivent donc dans --d-*.
+ *
+ * ── Installation ───────────────────────────────────────────────────
+ *
+ * Dans src/index.css, après @import "tailwindcss" :
+ *
+ *     @import "./theme.css";
+ */
+
+@theme {
+  /* ── Typographie ───────────────────────────────────────────────
+     Sora pour les titres, Plus Jakarta Sans pour les étiquettes et la
+     navigation, Inter pour le texte courant et les tableaux. Noto Sans
+     Arabic est en repli dans chaque pile : les trois familles latines
+     n'ont pas de glyphes arabes, et sans elle le rendu dépend de ce
+     qui traîne sur le poste. */
+  --font-sans: 'Inter', 'Noto Sans Arabic', system-ui, -apple-system, sans-serif;
+  --font-display: 'Sora', 'Noto Sans Arabic', system-ui, sans-serif;
+  --font-label: 'Plus Jakarta Sans', 'Noto Sans Arabic', system-ui, sans-serif;
+
+  /* Rampe neutre — le gris-bleu froid du système Luminous. En clair
+     elle part d'un blanc légèrement bleuté ; en sombre elle s'inverse,
+     et stone-50, qui sert de fond de page, devient l'obsidienne. */
+  --color-stone-50: #F5F6FC;
+  --color-stone-100: #EDEFF8;
+  --color-stone-200: #DFE3F0;
+  --color-stone-300: #C6CCDF;
+  --color-stone-400: #8A90AA;
+  --color-stone-500: #656C86;
+  --color-stone-600: #4C5370;
+  --color-stone-700: #373D56;
+  --color-stone-800: #232942;
+  --color-stone-900: #131729;
+  --color-stone-950: #0B0F19;
+
+  /* Le bandeau d'identité — un bleu profond, plus sombre que le fond de
+     page, pour que la carte qui porte le nom du salarié se détache sans
+     recourir à un dégradé étalé.
+
+     Ces jetons vivent ICI et non dans theme-effets.css, qui est un
+     fichier d'agrément : le bandeau doit être bleu même si ce fichier
+     n'est pas importé. Une couleur demandée n'est pas un effet
+     optionnel.
+
+     Valeurs mesurées :
+       clair  #1E2545  texte blanc 14,94:1 · texte doux 7,37:1
+       sombre #202848  texte blanc 13,76:1 · texte doux 7,11:1
+
+     En sombre, « plus sombre que le fond » n'a pas de sens : le canevas
+     est déjà presque noir. Le bandeau y est donc légèrement PLUS CLAIR,
+     ce qui produit le même effet — il se détache. */
+  --color-bandeau: #1E2545;
+  --color-bandeau-doux: #AEB6CC;
+  --color-bandeau-encart: #2B3357;
+  --color-bandeau-piste: #3A4370;
+
+  /* Surface — ce que « bg-white » voulait dire : le dessus des cartes,
+     des modales et des barres. En sombre, c'est le verre dépoli du
+     système : plus clair que le fond, jamais noir. */
+  --color-surface: #FFFFFF;
+  --color-surface-2: #F5F6FC;
+
+  /* La marque — l'axe indigo royal vers violet électrique du système.
+     brand-500 et brand-600 portent les fonds remplis, et ne bougent
+     PAS en mode sombre : un bouton rempli porte du texte blanc, et
+     l'éclaircir rendrait ce blanc illisible. */
+  --color-brand-50: #EEF0FE;
+  --color-brand-100: #E0E3FD;
+  --color-brand-200: #C3C7FA;
+  --color-brand-300: #9DA3F5;
+  --color-brand-400: #7C7FEF;
+  --color-brand-500: #5A5CE8;
+  --color-brand-600: #4F46E5;
+  --color-brand-700: #4338CA;
+  --color-brand-800: #3730A3;
+  --color-brand-900: #2E2A80;
+
+  /* Le violet, second axe du dégradé. Les classes « violet-* » et
+     « indigo-* » pointent ici, pour que les deux familles cessent de
+     se contredire à l'écran. */
+  --color-violet-50: #F3EEFE;
+  --color-violet-100: #E7DDFD;
+  --color-violet-500: #7C3AED;
+  --color-violet-600: #6D28D9;
+  --color-violet-700: #5B21B6;
+  --color-indigo-50: #EEF0FE;
+  --color-indigo-100: #E0E3FD;
+  --color-indigo-400: #7C7FEF;
+  --color-indigo-500: #5A5CE8;
+  --color-indigo-600: #4F46E5;
+  --color-indigo-700: #4338CA;
+  --color-blue-50: #EEF0FE;
+  --color-blue-100: #E0E3FD;
+  --color-blue-200: #C3C7FA;
+  --color-blue-300: #9DA3F5;
+  --color-blue-400: #7C7FEF;
+  --color-blue-500: #5A5CE8;
+  --color-blue-600: #4F46E5;
+  --color-blue-700: #4338CA;
+  --color-blue-800: #3730A3;
+  --color-blue-900: #2E2A80;
+
+  /* Le vert du système — statut en direct, pointage validé, paie signée.
+     Assombri en mode clair : l'émeraude #10B981 de la maquette ne donne
+     que 2,8 en texte sur fond blanc. */
+  --color-emerald-50: #E6F4EF;
+  --color-emerald-100: #CCEADF;
+  --color-emerald-500: #067653;
+  --color-emerald-600: #056A4B;
+  --color-emerald-700: #045840;
+  --color-green-50: #E6F4EF;
+  --color-green-100: #CCEADF;
+  --color-green-500: #067653;
+  --color-green-600: #056A4B;
+  --color-green-700: #045840;
+  --color-teal-50: #E6F4EF;
+  --color-teal-500: #067653;
+  --color-teal-600: #056A4B;
+  --color-cyan-50: #E6F2F4;
+  --color-cyan-100: #CCE4E9;
+  --color-cyan-500: #0F6E80;
+  --color-cyan-600: #0C5C6B;
+  --color-cyan-700: #094857;
+
+  /* L'or impérial — reconnaissance, jalons, mentions à vérifier.
+     Assombri en clair pour la même raison que le vert. */
+  --color-amber-50: #FBF3E4;
+  --color-amber-100: #F7E6C4;
+  --color-amber-500: #9A6005;
+  --color-amber-600: #8A5604;
+  --color-amber-700: #6F4503;
+  --color-yellow-50: #FBF3E4;
+  --color-yellow-500: #9A6005;
+  --color-yellow-600: #8A5604;
+  --color-orange-50: #FBEFE4;
+  --color-orange-100: #F6DCC4;
+  --color-orange-500: #A1560A;
+  --color-orange-600: #8A4908;
+
+  /* Le rubis — refus, alerte, échéance dépassée. C'est la seule famille
+     qui garde sa vivacité : une alerte réaccordée perd son urgence, et
+     l'urgence est sa fonction. */
+  --color-red-50: #FCEAEE;
+  --color-red-100: #F9D5DC;
+  --color-red-500: #D4193C;
+  --color-red-600: #B91334;
+  --color-red-700: #950F2A;
+  --color-rose-50: #FCEAEE;
+  --color-rose-100: #F9D5DC;
+  --color-rose-500: #D4193C;
+  --color-rose-600: #B91334;
+  --color-rose-700: #950F2A;
+  --color-pink-50: #FCEAEE;
+  --color-pink-500: #D4193C;
+  --color-pink-600: #B91334;
+
+  /* Les gris restants rejoignent la rampe principale plutôt que de
+     former une seconde famille décalée. */
+  --color-slate-50: #F5F6FC;
+  --color-slate-100: #EDEFF8;
+  --color-slate-200: #DFE3F0;
+  --color-slate-300: #C6CCDF;
+  --color-slate-400: #8A90AA;
+  --color-slate-500: #656C86;
+  --color-slate-600: #4C5370;
+  --color-slate-700: #373D56;
+  --color-slate-800: #232942;
+  --color-slate-900: #131729;
+  --color-gray-50: #F5F6FC;
+  --color-gray-100: #EDEFF8;
+  --color-gray-200: #DFE3F0;
+  --color-gray-300: #C6CCDF;
+  --color-gray-400: #8A90AA;
+  --color-gray-500: #656C86;
+  --color-gray-600: #4C5370;
+  --color-gray-700: #373D56;
+  --color-gray-800: #232942;
+  --color-gray-900: #131729;
+  --color-zinc-100: #EDEFF8;
+  --color-zinc-200: #DFE3F0;
+  --color-zinc-500: #656C86;
+  --color-zinc-700: #373D56;
+  --color-zinc-800: #232942;
+  --color-zinc-900: #131729;
+  --color-neutral-100: #EDEFF8;
+  --color-neutral-200: #DFE3F0;
+  --color-neutral-500: #656C86;
+  --color-neutral-700: #373D56;
+  --color-neutral-800: #232942;
+  --color-neutral-900: #131729;
+
+  /* Un jeton à part : la marque quand elle est du TEXTE ou une icône.
+     Il s'éclaircit en sombre, alors que la rampe remplie ne bouge pas —
+     un même ton ne peut pas être à la fois un fond qui porte du blanc
+     et un texte posé sur de l'obsidienne. */
+  --color-brand-texte: #4F46E5;
+  --color-or-texte: #8A5604;
+  --color-vert-texte: #056A4B;
+
+}
+
+/* ── Les valeurs du mode sombre, déclarées une seule fois ────────── */
+
+:root {
+  --d-stone-50: #0B0F19;
+  --d-stone-100: #0F1420;
+  --d-stone-200: #303850;
+  --d-stone-300: #3C445E;
+  --d-stone-400: #8A93AD;
+  --d-stone-500: #AEB6CC;
+  --d-stone-600: #C6CDDE;
+  --d-stone-700: #DCE1EE;
+  --d-stone-800: #F8FAFC;
+  --d-stone-900: #FFFFFF;
+  --d-stone-950: #FFFFFF;
+  --d-bandeau: #202848;
+  --d-bandeau-doux: #AEB6CC;
+  --d-bandeau-encart: #2C3560;
+  --d-bandeau-piste: #3B4578;
+  --d-surface: #151B2B;
+  --d-surface-2: #0F1420;
+  --d-brand-50: #171B3A;
+  --d-brand-100: #1E2450;
+  --d-brand-200: #2C3478;
+  --d-brand-300: #4049AF;
+  --d-brand-400: #6266E0;
+  --d-brand-500: #5A5CE8;
+  --d-brand-600: #4F46E5;
+  --d-brand-700: #6366F1;
+  --d-brand-800: #A5B4FC;
+  --d-brand-900: #C7D0FE;
+  --d-violet-50: #1C1335;
+  --d-violet-100: #281A4C;
+  --d-violet-500: #A78BFA;
+  --d-violet-600: #BFA3FC;
+  --d-violet-700: #D3BEFD;
+  --d-indigo-50: #161A33;
+  --d-indigo-100: #1C2147;
+  --d-indigo-400: #6266E0;
+  --d-indigo-500: #8B8FF0;
+  --d-indigo-600: #A5B4FC;
+  --d-indigo-700: #C0C7FD;
+  --d-blue-50: #161A33;
+  --d-blue-100: #1C2147;
+  --d-blue-200: #2A3270;
+  --d-blue-300: #3F48A8;
+  --d-blue-400: #6266E0;
+  --d-blue-500: #8B8FF0;
+  --d-blue-600: #A5B4FC;
+  --d-blue-700: #C0C7FD;
+  --d-blue-800: #D6DBFE;
+  --d-blue-900: #E8EBFF;
+  --d-emerald-50: #0A2219;
+  --d-emerald-100: #0E3325;
+  --d-emerald-500: #34D399;
+  --d-emerald-600: #6EE7B7;
+  --d-emerald-700: #A7F3D0;
+  --d-green-50: #0A2219;
+  --d-green-100: #0E3325;
+  --d-green-500: #34D399;
+  --d-green-600: #6EE7B7;
+  --d-green-700: #A7F3D0;
+  --d-teal-50: #0A2219;
+  --d-teal-500: #34D399;
+  --d-teal-600: #6EE7B7;
+  --d-cyan-50: #0A2028;
+  --d-cyan-100: #0E2F3A;
+  --d-cyan-500: #46BCD1;
+  --d-cyan-600: #7FD3E1;
+  --d-cyan-700: #A8E2EC;
+  --d-amber-50: #241A05;
+  --d-amber-100: #33260A;
+  --d-amber-500: #FBBF24;
+  --d-amber-600: #FCD34D;
+  --d-amber-700: #FDE68A;
+  --d-yellow-50: #241A05;
+  --d-yellow-500: #FBBF24;
+  --d-yellow-600: #FCD34D;
+  --d-orange-50: #271407;
+  --d-orange-100: #37200C;
+  --d-orange-500: #F7A860;
+  --d-orange-600: #FABF86;
+  --d-red-50: #2B0C14;
+  --d-red-100: #3D121D;
+  --d-red-500: #FB7185;
+  --d-red-600: #FDA4AF;
+  --d-red-700: #FECDD3;
+  --d-rose-50: #2B0C14;
+  --d-rose-100: #3D121D;
+  --d-rose-500: #FB7185;
+  --d-rose-600: #FDA4AF;
+  --d-rose-700: #FECDD3;
+  --d-pink-50: #2B0C14;
+  --d-pink-500: #FB7185;
+  --d-pink-600: #FDA4AF;
+  --d-slate-50: #0B0F19;
+  --d-slate-100: #0F1420;
+  --d-slate-200: #303850;
+  --d-slate-300: #3C445E;
+  --d-slate-400: #8A93AD;
+  --d-slate-500: #AEB6CC;
+  --d-slate-600: #C6CDDE;
+  --d-slate-700: #DCE1EE;
+  --d-slate-800: #F8FAFC;
+  --d-slate-900: #FFFFFF;
+  --d-gray-50: #0B0F19;
+  --d-gray-100: #0F1420;
+  --d-gray-200: #303850;
+  --d-gray-300: #3C445E;
+  --d-gray-400: #8A93AD;
+  --d-gray-500: #AEB6CC;
+  --d-gray-600: #C6CDDE;
+  --d-gray-700: #DCE1EE;
+  --d-gray-800: #F8FAFC;
+  --d-gray-900: #FFFFFF;
+  --d-zinc-100: #0F1420;
+  --d-zinc-200: #303850;
+  --d-zinc-500: #AEB6CC;
+  --d-zinc-700: #DCE1EE;
+  --d-zinc-800: #F8FAFC;
+  --d-zinc-900: #FFFFFF;
+  --d-neutral-100: #0F1420;
+  --d-neutral-200: #303850;
+  --d-neutral-500: #AEB6CC;
+  --d-neutral-700: #DCE1EE;
+  --d-neutral-800: #F8FAFC;
+  --d-neutral-900: #FFFFFF;
+  --d-brand-texte: #A5B4FC;
+  --d-or-texte: #FBBF24;
+  --d-vert-texte: #34D399;
+}
+
+/* ── Les deux déclencheurs ───────────────────────────────────────────
+
+   Le :not() du second bloc est indispensable : sans lui, quelqu'un dont
+   le système est en sombre ne pourrait jamais forcer le mode clair, la
+   règle du média écrasant son choix. */
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-stone-50: var(--d-stone-50);
+  --color-stone-100: var(--d-stone-100);
+  --color-stone-200: var(--d-stone-200);
+  --color-stone-300: var(--d-stone-300);
+  --color-stone-400: var(--d-stone-400);
+  --color-stone-500: var(--d-stone-500);
+  --color-stone-600: var(--d-stone-600);
+  --color-stone-700: var(--d-stone-700);
+  --color-stone-800: var(--d-stone-800);
+  --color-stone-900: var(--d-stone-900);
+  --color-stone-950: var(--d-stone-950);
+  --color-bandeau: var(--d-bandeau);
+  --color-bandeau-doux: var(--d-bandeau-doux);
+  --color-bandeau-encart: var(--d-bandeau-encart);
+  --color-bandeau-piste: var(--d-bandeau-piste);
+  --color-surface: var(--d-surface);
+  --color-surface-2: var(--d-surface-2);
+  --color-brand-50: var(--d-brand-50);
+  --color-brand-100: var(--d-brand-100);
+  --color-brand-200: var(--d-brand-200);
+  --color-brand-300: var(--d-brand-300);
+  --color-brand-400: var(--d-brand-400);
+  --color-brand-500: var(--d-brand-500);
+  --color-brand-600: var(--d-brand-600);
+  --color-brand-700: var(--d-brand-700);
+  --color-brand-800: var(--d-brand-800);
+  --color-brand-900: var(--d-brand-900);
+  --color-violet-50: var(--d-violet-50);
+  --color-violet-100: var(--d-violet-100);
+  --color-violet-500: var(--d-violet-500);
+  --color-violet-600: var(--d-violet-600);
+  --color-violet-700: var(--d-violet-700);
+  --color-indigo-50: var(--d-indigo-50);
+  --color-indigo-100: var(--d-indigo-100);
+  --color-indigo-400: var(--d-indigo-400);
+  --color-indigo-500: var(--d-indigo-500);
+  --color-indigo-600: var(--d-indigo-600);
+  --color-indigo-700: var(--d-indigo-700);
+  --color-blue-50: var(--d-blue-50);
+  --color-blue-100: var(--d-blue-100);
+  --color-blue-200: var(--d-blue-200);
+  --color-blue-300: var(--d-blue-300);
+  --color-blue-400: var(--d-blue-400);
+  --color-blue-500: var(--d-blue-500);
+  --color-blue-600: var(--d-blue-600);
+  --color-blue-700: var(--d-blue-700);
+  --color-blue-800: var(--d-blue-800);
+  --color-blue-900: var(--d-blue-900);
+  --color-emerald-50: var(--d-emerald-50);
+  --color-emerald-100: var(--d-emerald-100);
+  --color-emerald-500: var(--d-emerald-500);
+  --color-emerald-600: var(--d-emerald-600);
+  --color-emerald-700: var(--d-emerald-700);
+  --color-green-50: var(--d-green-50);
+  --color-green-100: var(--d-green-100);
+  --color-green-500: var(--d-green-500);
+  --color-green-600: var(--d-green-600);
+  --color-green-700: var(--d-green-700);
+  --color-teal-50: var(--d-teal-50);
+  --color-teal-500: var(--d-teal-500);
+  --color-teal-600: var(--d-teal-600);
+  --color-cyan-50: var(--d-cyan-50);
+  --color-cyan-100: var(--d-cyan-100);
+  --color-cyan-500: var(--d-cyan-500);
+  --color-cyan-600: var(--d-cyan-600);
+  --color-cyan-700: var(--d-cyan-700);
+  --color-amber-50: var(--d-amber-50);
+  --color-amber-100: var(--d-amber-100);
+  --color-amber-500: var(--d-amber-500);
+  --color-amber-600: var(--d-amber-600);
+  --color-amber-700: var(--d-amber-700);
+  --color-yellow-50: var(--d-yellow-50);
+  --color-yellow-500: var(--d-yellow-500);
+  --color-yellow-600: var(--d-yellow-600);
+  --color-orange-50: var(--d-orange-50);
+  --color-orange-100: var(--d-orange-100);
+  --color-orange-500: var(--d-orange-500);
+  --color-orange-600: var(--d-orange-600);
+  --color-red-50: var(--d-red-50);
+  --color-red-100: var(--d-red-100);
+  --color-red-500: var(--d-red-500);
+  --color-red-600: var(--d-red-600);
+  --color-red-700: var(--d-red-700);
+  --color-rose-50: var(--d-rose-50);
+  --color-rose-100: var(--d-rose-100);
+  --color-rose-500: var(--d-rose-500);
+  --color-rose-600: var(--d-rose-600);
+  --color-rose-700: var(--d-rose-700);
+  --color-pink-50: var(--d-pink-50);
+  --color-pink-500: var(--d-pink-500);
+  --color-pink-600: var(--d-pink-600);
+  --color-slate-50: var(--d-slate-50);
+  --color-slate-100: var(--d-slate-100);
+  --color-slate-200: var(--d-slate-200);
+  --color-slate-300: var(--d-slate-300);
+  --color-slate-400: var(--d-slate-400);
+  --color-slate-500: var(--d-slate-500);
+  --color-slate-600: var(--d-slate-600);
+  --color-slate-700: var(--d-slate-700);
+  --color-slate-800: var(--d-slate-800);
+  --color-slate-900: var(--d-slate-900);
+  --color-gray-50: var(--d-gray-50);
+  --color-gray-100: var(--d-gray-100);
+  --color-gray-200: var(--d-gray-200);
+  --color-gray-300: var(--d-gray-300);
+  --color-gray-400: var(--d-gray-400);
+  --color-gray-500: var(--d-gray-500);
+  --color-gray-600: var(--d-gray-600);
+  --color-gray-700: var(--d-gray-700);
+  --color-gray-800: var(--d-gray-800);
+  --color-gray-900: var(--d-gray-900);
+  --color-zinc-100: var(--d-zinc-100);
+  --color-zinc-200: var(--d-zinc-200);
+  --color-zinc-500: var(--d-zinc-500);
+  --color-zinc-700: var(--d-zinc-700);
+  --color-zinc-800: var(--d-zinc-800);
+  --color-zinc-900: var(--d-zinc-900);
+  --color-neutral-100: var(--d-neutral-100);
+  --color-neutral-200: var(--d-neutral-200);
+  --color-neutral-500: var(--d-neutral-500);
+  --color-neutral-700: var(--d-neutral-700);
+  --color-neutral-800: var(--d-neutral-800);
+  --color-neutral-900: var(--d-neutral-900);
+  --color-brand-texte: var(--d-brand-texte);
+  --color-or-texte: var(--d-or-texte);
+  --color-vert-texte: var(--d-vert-texte);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    color-scheme: dark;
+    --color-stone-50: var(--d-stone-50);
+    --color-stone-100: var(--d-stone-100);
+    --color-stone-200: var(--d-stone-200);
+    --color-stone-300: var(--d-stone-300);
+    --color-stone-400: var(--d-stone-400);
+    --color-stone-500: var(--d-stone-500);
+    --color-stone-600: var(--d-stone-600);
+    --color-stone-700: var(--d-stone-700);
+    --color-stone-800: var(--d-stone-800);
+    --color-stone-900: var(--d-stone-900);
+    --color-stone-950: var(--d-stone-950);
+    --color-bandeau: var(--d-bandeau);
+    --color-bandeau-doux: var(--d-bandeau-doux);
+    --color-bandeau-encart: var(--d-bandeau-encart);
+    --color-bandeau-piste: var(--d-bandeau-piste);
+    --color-surface: var(--d-surface);
+    --color-surface-2: var(--d-surface-2);
+    --color-brand-50: var(--d-brand-50);
+    --color-brand-100: var(--d-brand-100);
+    --color-brand-200: var(--d-brand-200);
+    --color-brand-300: var(--d-brand-300);
+    --color-brand-400: var(--d-brand-400);
+    --color-brand-500: var(--d-brand-500);
+    --color-brand-600: var(--d-brand-600);
+    --color-brand-700: var(--d-brand-700);
+    --color-brand-800: var(--d-brand-800);
+    --color-brand-900: var(--d-brand-900);
+    --color-violet-50: var(--d-violet-50);
+    --color-violet-100: var(--d-violet-100);
+    --color-violet-500: var(--d-violet-500);
+    --color-violet-600: var(--d-violet-600);
+    --color-violet-700: var(--d-violet-700);
+    --color-indigo-50: var(--d-indigo-50);
+    --color-indigo-100: var(--d-indigo-100);
+    --color-indigo-400: var(--d-indigo-400);
+    --color-indigo-500: var(--d-indigo-500);
+    --color-indigo-600: var(--d-indigo-600);
+    --color-indigo-700: var(--d-indigo-700);
+    --color-blue-50: var(--d-blue-50);
+    --color-blue-100: var(--d-blue-100);
+    --color-blue-200: var(--d-blue-200);
+    --color-blue-300: var(--d-blue-300);
+    --color-blue-400: var(--d-blue-400);
+    --color-blue-500: var(--d-blue-500);
+    --color-blue-600: var(--d-blue-600);
+    --color-blue-700: var(--d-blue-700);
+    --color-blue-800: var(--d-blue-800);
+    --color-blue-900: var(--d-blue-900);
+    --color-emerald-50: var(--d-emerald-50);
+    --color-emerald-100: var(--d-emerald-100);
+    --color-emerald-500: var(--d-emerald-500);
+    --color-emerald-600: var(--d-emerald-600);
+    --color-emerald-700: var(--d-emerald-700);
+    --color-green-50: var(--d-green-50);
+    --color-green-100: var(--d-green-100);
+    --color-green-500: var(--d-green-500);
+    --color-green-600: var(--d-green-600);
+    --color-green-700: var(--d-green-700);
+    --color-teal-50: var(--d-teal-50);
+    --color-teal-500: var(--d-teal-500);
+    --color-teal-600: var(--d-teal-600);
+    --color-cyan-50: var(--d-cyan-50);
+    --color-cyan-100: var(--d-cyan-100);
+    --color-cyan-500: var(--d-cyan-500);
+    --color-cyan-600: var(--d-cyan-600);
+    --color-cyan-700: var(--d-cyan-700);
+    --color-amber-50: var(--d-amber-50);
+    --color-amber-100: var(--d-amber-100);
+    --color-amber-500: var(--d-amber-500);
+    --color-amber-600: var(--d-amber-600);
+    --color-amber-700: var(--d-amber-700);
+    --color-yellow-50: var(--d-yellow-50);
+    --color-yellow-500: var(--d-yellow-500);
+    --color-yellow-600: var(--d-yellow-600);
+    --color-orange-50: var(--d-orange-50);
+    --color-orange-100: var(--d-orange-100);
+    --color-orange-500: var(--d-orange-500);
+    --color-orange-600: var(--d-orange-600);
+    --color-red-50: var(--d-red-50);
+    --color-red-100: var(--d-red-100);
+    --color-red-500: var(--d-red-500);
+    --color-red-600: var(--d-red-600);
+    --color-red-700: var(--d-red-700);
+    --color-rose-50: var(--d-rose-50);
+    --color-rose-100: var(--d-rose-100);
+    --color-rose-500: var(--d-rose-500);
+    --color-rose-600: var(--d-rose-600);
+    --color-rose-700: var(--d-rose-700);
+    --color-pink-50: var(--d-pink-50);
+    --color-pink-500: var(--d-pink-500);
+    --color-pink-600: var(--d-pink-600);
+    --color-slate-50: var(--d-slate-50);
+    --color-slate-100: var(--d-slate-100);
+    --color-slate-200: var(--d-slate-200);
+    --color-slate-300: var(--d-slate-300);
+    --color-slate-400: var(--d-slate-400);
+    --color-slate-500: var(--d-slate-500);
+    --color-slate-600: var(--d-slate-600);
+    --color-slate-700: var(--d-slate-700);
+    --color-slate-800: var(--d-slate-800);
+    --color-slate-900: var(--d-slate-900);
+    --color-gray-50: var(--d-gray-50);
+    --color-gray-100: var(--d-gray-100);
+    --color-gray-200: var(--d-gray-200);
+    --color-gray-300: var(--d-gray-300);
+    --color-gray-400: var(--d-gray-400);
+    --color-gray-500: var(--d-gray-500);
+    --color-gray-600: var(--d-gray-600);
+    --color-gray-700: var(--d-gray-700);
+    --color-gray-800: var(--d-gray-800);
+    --color-gray-900: var(--d-gray-900);
+    --color-zinc-100: var(--d-zinc-100);
+    --color-zinc-200: var(--d-zinc-200);
+    --color-zinc-500: var(--d-zinc-500);
+    --color-zinc-700: var(--d-zinc-700);
+    --color-zinc-800: var(--d-zinc-800);
+    --color-zinc-900: var(--d-zinc-900);
+    --color-neutral-100: var(--d-neutral-100);
+    --color-neutral-200: var(--d-neutral-200);
+    --color-neutral-500: var(--d-neutral-500);
+    --color-neutral-700: var(--d-neutral-700);
+    --color-neutral-800: var(--d-neutral-800);
+    --color-neutral-900: var(--d-neutral-900);
+    --color-brand-texte: var(--d-brand-texte);
+    --color-or-texte: var(--d-or-texte);
+    --color-vert-texte: var(--d-vert-texte);
+  }
+}
+
+/* ── Application de la typographie ───────────────────────────────── */
+
+/* Les polices NE SONT PLUS chargées ici.
+ *
+ * Elles l'étaient par un `@import url(...)` posé à cet endroit, et
+ * c'était une faute : la spécification CSS exige que tout `@import`
+ * précède toute autre règle. PostCSS refusait donc la feuille
+ * ENTIÈRE — pas seulement cette ligne. Résultat : ni la palette, ni
+ * le mode sombre, ni les effets n'étaient appliqués, et les pages
+ * restaient exactement comme avant. Le message était
+ * « @import must precede all other statements ».
+ *
+ * Le déplacer en tête de ce fichier n'aurait pas suffi : theme.css
+ * est lui-même importé depuis index.css, après Tailwind. Une fois les
+ * fichiers assemblés, l'import des polices se serait de nouveau
+ * retrouvé après d'autres règles.
+ *
+ * Elles sont donc chargées dans index.html, où la question d'ordre ne
+ * se pose pas. Ajoute ces trois lignes dans <head> :
+ *
+ *   <link rel="preconnect" href="https://fonts.googleapis.com">
+ *   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+ *   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&family=Inter:wght@400;500;600&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap">
+ *
+ * C'est aussi plus rapide : un `@import` dans une feuille oblige le
+ * navigateur à télécharger la feuille, la lire, puis seulement
+ * demander les polices. Le <link> part en même temps que le reste.
+ *
+ * Les deux `preconnect` ouvrent la connexion aux serveurs de Google
+ * pendant que la page se charge, au lieu d'attendre la demande.
+ *
+ * Si les polices ne chargent pas, les familles de repli prennent le
+ * relais et la mise en page tient : seule l'allure change. */
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-stone-50);
+  color: var(--color-stone-800);
+}
+
+/* Les titres passent en Sora sans qu'aucune page ne soit touchée. Une
+   page qui impose déjà sa police par une classe garde la sienne. */
+h1, h2, h3 { font-family: var(--font-display); letter-spacing: -.025em; }
+h4, h5, h6, th, label, button { font-family: var(--font-label); }
+
+/* Les chiffres alignés dans les tableaux : sans cela, une colonne
+   d'heures ou de montants tremble d'une ligne à l'autre. */
+td, th, time, .tabulaire { font-variant-numeric: tabular-nums; }
+
+/* L'arabe demande un peu d'air : les diacritiques et les hampes se
+   font rogner à l'interligne du latin. */
+[lang="ar"] { line-height: 1.85; }
+
+/* ── Le texte blanc posé sur un accent inversé ───────────────────────
+
+   Les rampes d'accent s'éclaircissent en mode sombre, ce qui est juste
+   pour un texte ou une pastille pâle. Mais un bouton plein écrit
+   « bg-red-600 text-white » devient alors du blanc sur rose clair :
+   2,69 de contraste, illisible.
+
+   Neuf endroits sont concernés dans l'application — six boutons de
+   suppression, deux en ambre, un en indigo. Les corriger un par un
+   marcherait aujourd'hui et se reperdrait au prochain bouton ajouté.
+   La règle ci-dessous rend le texte sombre partout où ce couple
+   apparaît, présent et à venir.
+
+   Elle ne vise QUE les tons 500 à 700, les seuls assez clairs en mode
+   sombre pour poser le problème : un « bg-red-50 text-white » n'existe
+   pas, et les pastilles pâles ne sont pas touchées. */
+
+[data-theme="dark"] [class*="bg-red-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-red-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-red-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-rose-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-rose-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-rose-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-pink-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-pink-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-pink-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-amber-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-amber-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-amber-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-yellow-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-yellow-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-yellow-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-orange-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-orange-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-orange-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-green-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-green-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-green-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-emerald-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-emerald-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-emerald-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-teal-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-teal-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-teal-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-cyan-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-cyan-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-cyan-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-blue-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-blue-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-blue-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-indigo-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-indigo-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-indigo-7"][class*="text-white"],
+[data-theme="dark"] [class*="bg-violet-5"][class*="text-white"],
+[data-theme="dark"] [class*="bg-violet-6"][class*="text-white"],
+[data-theme="dark"] [class*="bg-violet-7"][class*="text-white"] {
+  color: #0B0F19;
+}
+
+/* ── Détails qui se voient ───────────────────────────────────────── */
+
+html { background-color: var(--color-stone-50); }
+
+[data-theme="dark"] select option { background-color: var(--color-surface); }
+
+/* Une illustration lumineuse dans une page sombre éblouit. On ne
+   touche pas aux photos de profil — un visage assombri serait pire. */
+[data-theme="dark"] .illustration { filter: brightness(.88) contrast(1.04); }
+
+/* Le flux du pointage facial n'est jamais retouché : un filtre CSS
+   n'affecte pas le canvas d'analyse, mais il ferait croire au salarié
+   que l'image analysée est celle qu'il voit. */
+[data-theme="dark"] video { filter: none; }

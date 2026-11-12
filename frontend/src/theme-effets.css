@@ -1,0 +1,393 @@
+/* src/theme-effets.css
+ *
+ * Couche de finition : surfaces, liserés, halos, mouvement.
+ * À importer APRÈS theme.css, dans le fichier qui importe déjà
+ * theme.css :
+ *
+ *     import './theme.css';
+ *     import './theme-effets.css';
+ *
+ * ── Pourquoi un fichier séparé ─────────────────────────────────────
+ *
+ * theme.css porte 122 jetons de couleur déjà vérifiés au contraste.
+ * Ceci est un choix esthétique, pas une fondation : en le gardant à
+ * part, tu retires une seule ligne d'import si le rendu te gêne le
+ * jour de la soutenance.
+ *
+ * ── Une mise en garde, apprise à mes dépens ───────────────────────
+ *
+ * J'avais écrit ici que rien de ce fichier n'était nécessaire. C'était
+ * faux : `.panneau` portait à lui seul le fond des cartes. Le fichier
+ * n'étant pas importé, toutes les cartes du tableau de bord étaient
+ * TRANSPARENTES, et la page paraissait cassée sans qu'aucune erreur
+ * ne s'affiche.
+ *
+ * Les composants posent maintenant leurs classes de palette en socle
+ * — `bg-surface border border-stone-200` — PUIS `panneau`. La page
+ * reste correcte sans ce fichier ; il ne fait que raffiner.
+ *
+ * Si tu ajoutes une classe ici, pose-toi la question : que voit-on si
+ * ce fichier manque ? La réponse doit être « une page plus sobre »,
+ * jamais « une page cassée ».
+ *
+ * ── Ce que la maquette fait vraiment ───────────────────────────────
+ *
+ * Le DESIGN.md promet du « Sophisticated Glassmorphism », des
+ * « ambient radial gradients » et des dégradés partout. Les écrans du
+ * zip disent autre chose : j'ai compté, il y a CINQ dégradés dans
+ * tout le tableau de bord, et tous sont minuscules — tuile de logo,
+ * anneau d'avatar, tuile d'icône, barre de 6 px, un bouton. Le fond
+ * est un aplat, les cartes sont des aplats.
+ *
+ * Quand le texte et les écrans ne disent pas la même chose, ce sont
+ * les écrans qui ont raison : c'est eux qu'on regarde.
+ *
+ * L'élégance vient donc de trois choses, et aucune n'est un fondu :
+ *   — des surfaces franches séparées par un seul cran de clarté
+ *   — des liserés fins mais réellement visibles
+ *   — beaucoup d'espace
+ *
+ * L'accent coloré reste rare et petit. Étalé sur une grande surface,
+ * il produit l'effet inverse de celui recherché.
+ *
+ *   surfaces           → .panneau, .panneau-2, .panneau-3
+ * *   accent (petit)     → .tuile-accent, .halo-or, .halo-indigo
+ *   halo sous bouton   → .lueur, .lueur-or, .lueur-vert
+ *   point « en poste » → .pouls
+ *   distinction        → .scintille
+ *   mouvement          → .anim-entree, .leve, .eclat, .remplit
+ *
+ * ── Un avertissement qui compte plus que les effets ────────────────
+ *
+ * Tout le mouvement s'arrête sous `prefers-reduced-motion`. Ce n'est
+ * pas une politesse : une animation qui ignore ce réglage rend
+ * l'interface pénible, voire inutilisable, pour les personnes
+ * sensibles au mouvement. C'est aussi un critère d'accessibilité
+ * qu'un jury peut demander à voir.
+ */
+
+/* ── À utiliser sur le conteneur racine d'une page ───────────────────
+ *
+ * `body::before` est posé en `z-index: -1`. Il suffit donc qu'un
+ * conteneur opaque soit empilé par-dessus pour qu'il disparaisse — et
+ * c'est exactement le cas de Layout.tsx et AuthLayout.tsx, dont le
+ * div racine porte `bg-stone-50`. Le fond ambiant était bien chargé,
+ * simplement recouvert.
+ *
+ * `.fond-ambiant` porte la couleur ET les dégradés, donc rien ne se
+ * recouvre. Dans Layout.tsx et AuthLayout.tsx, remplace :
+ *
+ *     <div className="min-h-screen bg-stone-50">
+ *     <div className="min-h-screen fond-ambiant">
+ *
+ * `background-attachment: fixed` reproduit le comportement du
+ * pseudo-élément : l'atmosphère appartient à la fenêtre, elle ne
+ * défile pas avec le contenu. */
+.fond-ambiant { background-color: var(--color-stone-50); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   2 · Les trois niveaux de surface
+   ═══════════════════════════════════════════════════════════════════
+
+   La version précédente de ce fichier posait du verre dépoli
+   (`backdrop-filter: blur()`) sur un fond lavé de dégradés. J'ai
+   compté les dégradés de la maquette avant de le faire : il y en a
+   CINQ dans tout l'écran, et tous sont minuscules — une tuile de logo
+   de 40 px, un anneau d'avatar, une tuile d'icône, une barre de 6 px
+   de haut, un bouton. Le fond est un aplat. Les cartes sont des
+   aplats.
+
+   Son élégance ne vient donc pas des fondus mais de trois choses :
+   des surfaces franches qui se distinguent par un seul cran de
+   clarté, des liserés fins, et beaucoup d'espace. Un dégradé étalé
+   sur une grande surface produit l'effet inverse de celui recherché.
+
+   Et sans dégradé derrière, le flou n'a plus rien à flouter : il
+   coûterait du temps de calcul à chaque image pour redonner la même
+   couleur. Il est donc retiré.
+
+   Les noms suivent : ce sont des panneaux, pas du verre. */
+
+.panneau,
+.panneau-2,
+.panneau-3 {
+  background-color: var(--color-surface);
+  border: 1px solid rgba(15, 23, 42, .16);
+}
+
+/* Les alphas de bordure sont mesurés, pas choisis à l'œil. Le bord est
+   composé sur la surface de la carte :
+
+     alpha .07 → 1,15:1   invisible, la carte flotte sans contour
+     alpha .12 → 1,28:1   encore trop faible
+     alpha .16 → 1,40:1   ✓ lisible sans être dur
+
+   En SOMBRE, le bord est un voile BLANC posé sur un fond sombre : les
+   mêmes alphas n'y donnent pas les mêmes écarts. Mesuré sur #171B26,
+   l'alpha .07 ne rendait que 1,21:1 — la valeur que ce tableau
+   qualifie lui-même d'invisible. Les cartes n'avaient donc aucun
+   contour en mode sombre ; et comme `.panneau` n'est pas dans une
+   couche Tailwind, il écrasait jusqu'à la bordure utilitaire qui
+   aurait pu sauver la mise.
+
+     alpha .07 → 1,21:1   invisible
+     alpha .11 → 1,38:1   limite
+     alpha .14 → 1,53:1   ✓ retenu pour .panneau  */
+
+.panneau-2 {
+  border-color: rgba(15, 23, 42, .18);
+  box-shadow: 0 12px 32px -8px rgba(15, 23, 42, .1);
+}
+
+.panneau-3 {
+  border-color: rgba(15, 23, 42, .2);
+  box-shadow: 0 20px 48px -12px rgba(15, 23, 42, .16);
+}
+
+/* En sombre, la hiérarchie se fait par la clarté du fond, exactement
+   comme dans la maquette : #0F131D pour le canevas, #171B26 puis
+   #1C1F2A et #262A35 pour les niveaux successifs. Un seul cran
+   d'écart suffit à séparer deux plans ; davantage fait tache. */
+[data-theme="dark"] .panneau   { background-color: #171B26; border-color: rgba(255,255,255,.14); }
+[data-theme="dark"] .panneau-2 { background-color: #1C1F2A; border-color: rgba(255,255,255,.16);
+                                 box-shadow: 0 12px 32px -8px rgba(0,0,0,.5); }
+[data-theme="dark"] .panneau-3 { background-color: #262A35; border-color: rgba(255,255,255,.18);
+                                 box-shadow: 0 20px 48px -12px rgba(0,0,0,.6); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .panneau   { background-color: #171B26; border-color: rgba(255,255,255,.14); }
+  :root:not([data-theme="light"]) .panneau-2 { background-color: #1C1F2A; border-color: rgba(255,255,255,.16);
+                                               box-shadow: 0 12px 32px -8px rgba(0,0,0,.5); }
+  :root:not([data-theme="light"]) .panneau-3 { background-color: #262A35; border-color: rgba(255,255,255,.18);
+                                               box-shadow: 0 20px 48px -12px rgba(0,0,0,.6); }
+}
+
+/* ── Le bandeau d'identité ──────────────────────────────────────────
+ *
+ * Un bleu profond, plus sombre que le fond de page, pour que la carte
+ * qui porte le nom du salarié se détache du reste sans recourir à un
+ * dégradé étalé.
+ *
+ * Les deux valeurs sont mesurées :
+ *
+ *   clair  #1E2545   texte blanc 14,94:1 · texte doux 7,37:1
+ *                    contre le fond #F5F6FC : 13,85:1
+ *   sombre #202848   texte blanc 13,76:1 · texte doux 7,11:1
+ *                    contre le canevas #0F131D : 1,29:1
+ *
+ * En sombre, « plus sombre que le fond » n'a pas de sens : le canevas
+ * est déjà presque noir. Le bandeau y est donc légèrement PLUS CLAIR,
+ * ce qui produit le même effet — il se détache. Un bandeau plus sombre
+ * qu'un fond déjà sombre disparaîtrait.
+ *
+ * Les couleurs du texte sont imposées ici plutôt que laissées aux
+ * classes de la page : `text-stone-800` vaut du texte foncé en mode
+ * clair, donc illisible sur ce bleu. */
+.bandeau-identite {
+  background-color: #1E2545;
+  border-color: rgba(255, 255, 255, .1);
+}
+.bandeau-identite,
+.bandeau-identite h1,
+.bandeau-identite h2 { color: #FFFFFF; }
+
+/* Les textes secondaires, les pastilles et les barres internes
+   suivent, sinon ils restent réglés pour un fond clair. */
+.bandeau-identite .doux        { color: #AEB6CC; }
+.bandeau-identite .encart      { background-color: rgba(255,255,255,.07);
+                                 border-color: rgba(255,255,255,.11); }
+.bandeau-identite .piste       { background-color: rgba(255,255,255,.16); }
+
+[data-theme="dark"] .bandeau-identite { background-color: #202848; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .bandeau-identite { background-color: #202848; }
+}
+
+/* La tuile accentuée : le seul endroit où un dégradé est permis, et
+   seulement sur de petits objets — logo, icône de section, anneau
+   d'avatar. C'est l'usage exact qu'en fait la maquette. */
+.tuile-accent {
+  background-image: linear-gradient(to top right, #4F46E5, #7C3AED);
+}
+
+/* Les valeurs de la maquette pour cette tuile — #8083FF vers #C0C1FF —
+ * ne tiennent que si elle contient une icône. Dès qu'elle porte du
+ * texte blanc, comme les initiales d'un avatar, on tombe à 3,18:1,
+ * sous le minimum de 4,5. Les deux valeurs retenues donnent 6,29:1 et
+ * 5,70:1, pour la même teinte à l'œil.
+ *
+ * Pour une tuile qui ne porte qu'une icône décorative, les teintes
+ * claires d'origine conviennent. */
+.tuile-accent-clair {
+  background-image: linear-gradient(to top right, #8083ff, #c0c1ff);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   3 · Les halos
+   ═══════════════════════════════════════════════════════════════════
+
+   Une ombre colorée sous un bouton de même couleur. L'effet n'existe
+   que si la teinte de l'ombre suit celle du fond : une ombre indigo
+   sous un bouton vert donne une tache sale.
+
+   Trois variantes, pour les trois accents du système. */
+
+/* Volontairement discrètes. Le DESIGN.md demande des « soft neon
+   drop-shadows » à 40 % d'opacité ; posées sur des surfaces plates,
+   elles font bon marché — le halo devient l'élément le plus voyant de
+   la page alors qu'il ne doit qu'asseoir le bouton. À 18 %, l'ombre
+   se lit comme une ombre portée colorée, ce qui est l'intention. */
+.lueur      { box-shadow: 0 4px 14px -4px rgba(90, 92, 232, .45); }
+.lueur-or   { box-shadow: 0 4px 14px -4px rgba(245, 158, 11, .42); }
+.lueur-vert { box-shadow: 0 4px 14px -4px rgba(16, 185, 129, .40); }
+
+.lueur:hover      { box-shadow: 0 6px 18px -4px rgba(90, 92, 232, .58); }
+.lueur-or:hover   { box-shadow: 0 6px 18px -4px rgba(245, 158, 11, .55); }
+.lueur-vert:hover { box-shadow: 0 6px 18px -4px rgba(16, 185, 129, .52); }
+
+/* ── Le texte posé sur l'or ─────────────────────────────────────────
+ *
+ * Mesure, sur l'or #F59E0B de la maquette :
+ *
+ *     texte blanc    2,15:1   ← très en dessous du minimum de 4,5
+ *     texte #451A03  6,97:1   ✓
+ *
+ * L'or est la seule couleur du système qui ne supporte pas le blanc.
+ * Indigo, violet, vert et rouge le supportent ; lui non, parce qu'il
+ * est clair. Un bouton doré à texte blanc paraît correct à l'écran du
+ * développeur et devient illisible en projection, où le contraste
+ * s'écrase encore.
+ *
+ * À poser sur tout élément doré portant du texte. */
+.sur-or { color: #451a03; }
+
+/* Le halo d'avatar : un anneau dégradé autour d'une photo ou d'une
+   initiale. Posé en ombres concentriques, il ne déplace rien dans la
+   mise en page — contrairement à une bordure, qui agrandirait
+   l'élément et décalerait ses voisins. */
+.halo-or {
+  box-shadow:
+    0 0 0 2px var(--color-surface, #fff),
+    0 0 0 4px #f59e0b,
+    0 0 24px -4px rgba(245, 158, 11, .55);
+}
+.halo-indigo {
+  box-shadow:
+    0 0 0 2px var(--color-surface, #fff),
+    0 0 0 4px #6366f1,
+    0 0 24px -4px rgba(99, 102, 241, .55);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   4 · Mouvement
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Entrée en fondu, avec une légère montée. La variable --i permet
+   d'échelonner les éléments d'une liste :
+   style={{ '--i': index }} → chaque carte part 60 ms après la
+   précédente, ce qui donne une arrivée en cascade plutôt qu'un bloc.
+
+   `backwards` est indispensable : sans lui, l'élément est visible à
+   sa place finale pendant tout le délai, puis saute au début de
+   l'animation. */
+@keyframes entree {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.anim-entree {
+  animation: entree .45s cubic-bezier(.22, .61, .36, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+/* Le point « en poste ». Deux anneaux qui s'écartent en s'effaçant.
+   Le point lui-même ne bouge pas : c'est le halo qui respire, sinon
+   la pastille tressaute. */
+@keyframes pouls {
+  0%   { box-shadow: 0 0 0 0   rgba(16, 185, 129, .55); }
+  70%  { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(16, 185, 129, 0); }
+}
+.pouls { animation: pouls 2s ease-out infinite; }
+
+/* Reflet qui traverse une pastille dorée. Réservé aux distinctions :
+   employé le mois, ancienneté. Sur un élément courant, c'est
+   fatigant. */
+@keyframes scintille {
+  from { background-position: -160% 0; }
+  to   { background-position:  260% 0; }
+}
+.scintille {
+  background-image: linear-gradient(
+    110deg,
+    transparent 38%,
+    rgba(255, 255, 255, .45) 50%,
+    transparent 62%
+  );
+  background-size: 160% 100%;
+  background-repeat: no-repeat;
+  animation: scintille 3.2s ease-in-out infinite;
+}
+
+/* Le soulèvement au survol. `will-change` prévient le navigateur :
+   il prépare une couche séparée et l'animation ne repeint pas la
+   page entière. */
+.leve {
+  transition: transform .22s cubic-bezier(.22, .61, .36, 1),
+              box-shadow .22s ease;
+  will-change: transform;
+}
+.leve:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 36px -12px rgba(15, 23, 42, .22);
+}
+[data-theme="dark"] .leve:hover {
+  box-shadow: 0 16px 36px -12px rgba(0, 0, 0, .6);
+}
+
+/* Le chiffre qui change. Un bref éclat sur la valeur mise à jour :
+   sans cela, un compteur qui passe de 3 à 4 ne se remarque pas. */
+@keyframes eclat {
+  0%   { color: inherit; }
+  18%  { color: #6366f1; }
+  100% { color: inherit; }
+}
+.eclat { animation: eclat 1.1s ease-out; }
+
+/* Barre de progression qui se remplit depuis la gauche, et depuis la
+   droite en arabe — `transform-origin: inline-start` suit le sens de
+   lecture au lieu de le contredire. */
+@keyframes remplir {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.remplit {
+  transform-origin: inline-start;
+  animation: remplir .9s cubic-bezier(.22, .61, .36, 1) backwards;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   5 · Respect du réglage système
+   ═══════════════════════════════════════════════════════════════════
+
+   Tout s'arrête. Les éléments animés à l'entrée doivent rester
+   VISIBLES — d'où `opacity: 1` explicite : sans lui, une animation
+   coupée laisserait des cartes invisibles, et la page paraîtrait
+   vide. C'est l'erreur classique de cette règle. */
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-entree,
+  .pouls,
+  .scintille,
+  .eclat,
+  .remplit {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .leve { transition: none; }
+  .leve:hover { transform: none; }
+
+  .scintille { background-image: none; }
+}

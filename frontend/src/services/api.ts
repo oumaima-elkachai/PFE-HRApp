@@ -19,7 +19,17 @@ api.interceptors.request.use(async (config) => {
 });
 
 api.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    // Une reponse binaire doit conserver son type MIME : le Blob
+    // qu'axios construit le porte deja, mais seulement si on ne le
+    // reconstruit pas. Pour le JSON, renvoyer data evite d'ecrire
+    // .data partout dans l'application.
+    if (response.config.responseType === 'blob') {
+      return response.data;
+    }
+    return response.data;
+  },
+  
   (error) => {
     const statut = error.response?.status;
 

@@ -46,7 +46,7 @@ export class FrontStack extends Stack {
 
     // ── Distribution ──────────────────────────────────────────────
     this.distribution = new Distribution(this, "Distribution", {
-      comment: `TERRA HR — application web (${etape.nom})`,
+      comment: `HR UP — application web (${etape.nom})`,
 
       defaultBehavior: {
         // OAC : CloudFront signe ses requêtes vers S3, le compartiment

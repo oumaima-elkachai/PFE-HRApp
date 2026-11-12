@@ -1,20 +1,19 @@
 // src/components/ProtectedRoute.tsx
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { usePermissions, type Permission, type Role } from '../hooks/usePermissions';
+import { usePermissions, type Permission, } from '../hooks/usePermissions';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
   requiredPermission?: Permission;
-  allowedRoles?: Role[];
-  roles?: string[]; 
+  allowedRoles?: string[]; 
 }
 
 export default function ProtectedRoute({ 
   children, 
   requiredPermission,
   allowedRoles,
-  roles, 
+  allowedRoles: roles, 
 }: ProtectedRouteProps) {
   const { user, loading } = useAuth();
   const { role, permissions } = usePermissions();
@@ -22,7 +21,7 @@ export default function ProtectedRoute({
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#F5F0E8] flex items-center justify-center">
+      <div className="min-h-screen bg-stone-100 flex items-center justify-center">
         <div className="text-center">
           <div className="w-8 h-8 border-2 border-[#2D5C1A] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           <p className="text-sm text-[#6B6B6B]">Chargement...</p>

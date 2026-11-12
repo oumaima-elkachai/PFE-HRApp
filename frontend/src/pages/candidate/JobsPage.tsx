@@ -1,13 +1,44 @@
 // src/pages/candidate/JobsPage.tsx
-import { useState, useEffect, useRef } from 'react';
+//
+// Les offres publiées, côté candidat : liste, filtres, recherche,
+// pagination.
+//
+// ── Ce qui a changé depuis la version précédente ────────────────────
+//
+// 1. La carte mène au détail. Toute la carte est cliquable, et un
+//    bouton « Détails » le dit explicitement — un bloc cliquable sans
+//    repère visuel ne se découvre pas.
+//
+// 2. Le paramètre `?offre=` est enfin lu. La page Recommandations
+//    envoyait vers `/candidat/offres?offre=ID` depuis le début, et
+//    cette page ignorait le paramètre : le bouton « Postuler » d'une
+//    recommandation ouvrait la liste complète, sans rien montrer de
+//    l'offre choisie. Il redirige maintenant vers le détail.
+//
+// 3. Une offre déjà postulée le dit. Rien n'empêchait d'envoyer deux
+//    dossiers pour le même poste, et le bouton affichait « Postuler »
+//    dans tous les cas.
+//
+// 4. Le formulaire de candidature vit dans son propre fichier : la
+//    page de détail s'en sert aussi.
+
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Briefcase, MapPin, Clock, Search,
-  SlidersHorizontal, X, ChevronRight,
-  CheckCircle, Send, Upload, FileText,
+  Briefcase, MapPin, Clock, Search, X, ChevronRight,
+  Flame, Check, Send,
 } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
+import Pagination from '../../components/ui/Pagination';
+import { EnTete, Toast, Vide, CARTE, ACCENT } from '../../components/ui/kit';
+import ModalPostuler from '../../components/candidat/ModalPostuler';
 import api from '../../services/api';
-import { useAuth } from '../../context/AuthContext';
+import { STYLES_ANIMATION } from '../../utils/animations';
+
+const PAR_PAGE = 6;
+
+
+// ── Types ──────────────────────────────────────────────────────────
 
 interface Offre {
   id: string;
@@ -16,641 +47,398 @@ interface Offre {
   type: string;
   modeTravail: string;
   description: string;
-  statut: 'active' | 'urgente' | 'fermee';
+  statut: 'active' | 'urgente' | 'fermee' | 'ACTIVE' | 'POURVUE' | 'ARCHIVEE';
+  urgente?: boolean;
   creeLe: string;
+  lieu?: string;
 }
 
-// ── Badge type offre ──────────────────────────
-function TypeBadge({ type }: { type: string }) {
-  const colors: Record<string, string> = {
-    CDI:       'bg-[#d8f3dc] text-[#2d6a4f]',
-    CDD:       'bg-[#dbeafe] text-[#1e40af]',
-    Stage:     'bg-[#fef3c7] text-[#92400e]',
-    Freelance: 'bg-[#f3e8ff] text-[#7c3aed]',
-  };
-  return (
-    <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${colors[type] ?? 'bg-gray-100 text-gray-600'}`}>
-      {type}
-    </span>
-  );
-}
+const STYLE_TYPE: Record<string, { bg: string; text: string }> = {
+  CDI:        { bg: 'bg-brand-500/10', text: 'text-brand-texte' },
+  CDD:        { bg: 'bg-blue-50',      text: 'text-blue-600' },
+  STAGE:      { bg: 'bg-amber-50',     text: 'text-amber-600' },
+  Stage:      { bg: 'bg-amber-50',     text: 'text-amber-600' },
+  ALTERNANCE: { bg: 'bg-purple-50',    text: 'text-purple-600' },
+  Freelance:  { bg: 'bg-purple-50',    text: 'text-purple-600' },
+};
 
-// ── Badge statut ──────────────────────────────
-function StatutBadge({ statut }: { statut: Offre['statut'] }) {
-  if (statut === 'urgente') return (
-    <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
-      🔥 Urgent
-    </span>
-  );
-  return null;
-}
+const styleType = (t: string) =>
+  STYLE_TYPE[t] ?? { bg: 'bg-stone-100', text: 'text-stone-500' };
 
-// ── Modal Postuler ────────────────────────────
-function ModalPostuler({
-  offre,
-  onClose,
-  onSuccess,
-}: {
+const estFermee = (o: Offre) =>
+  o.statut === 'fermee' || o.statut === 'POURVUE' || o.statut === 'ARCHIVEE';
+
+const estUrgente = (o: Offre) => Boolean(o.urgente) || o.statut === 'urgente';
+
+// ── Carte d'une offre ──────────────────────────────────────────────
+
+function CarteOffre({ offre, dejaPostule, onPostuler, onOuvrir, delai }: {
   offre: Offre;
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
-  const { user } = useAuth();
-  const [form, setForm] = useState({
-    nom:              user?.nom        ?? '',
-    prenom:           user?.prenom     ?? '',
-    email:            user?.email      ?? '',
-    telephone:        '',
-    niveauEtude:      '',
-    experience:       '',
-    competences:      '',
-    lettreMotivation: '',
-    linkedin:         '',
-    portfolio:        '',
-  });
-  
-  // ✅ État pour le CV
-  const [cvFile, setCvFile] = useState<File | null>(null);
-  const [cvPreview, setCvPreview] = useState<string>('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  
-  const [loading,  setLoading]  = useState(false);
-  const [erreur,   setErreur]   = useState('');
-  const [success,  setSuccess]  = useState(false);
-
-  // ✅ Gestion upload CV
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Validation
-    const allowedTypes = [
-      'application/pdf',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    ];
-    const maxSize = 5 * 1024 * 1024; // 5 MB
-
-    if (!allowedTypes.includes(file.type)) {
-      setErreur('Format non supporté. Utilisez PDF ou DOCX.');
-      return;
-    }
-
-    if (file.size > maxSize) {
-      setErreur('Le fichier est trop volumineux (max 5 MB).');
-      return;
-    }
-
-    setCvFile(file);
-    setCvPreview(file.name);
-    setErreur('');
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Validation CV obligatoire
-    if (!cvFile) {
-      setErreur('⚠️ Le CV est obligatoire');
-      return;
-    }
-
-    setLoading(true);
-    setErreur('');
-    
-    try {
-      // ✅ Créer FormData pour upload multipart
-      const formData = new FormData();
-      
-      // Fichier CV
-      formData.append('cv', cvFile);
-      
-      // Données du formulaire
-      formData.append('offreId', offre.id);
-      formData.append('nom', form.nom);
-      formData.append('prenom', form.prenom);
-      formData.append('email', form.email);
-      formData.append('telephone', form.telephone);
-      formData.append('niveauEtude', form.niveauEtude);
-      formData.append('experience', form.experience);
-      formData.append('lettreMotivation', form.lettreMotivation);
-      formData.append('linkedin', form.linkedin || '');
-      formData.append('portfolio', form.portfolio || '');
-      
-      // Compétences (convertir en JSON)
-      const competencesArray = form.competences
-        .split(',')
-        .map(c => c.trim())
-        .filter(Boolean);
-      formData.append('competences', JSON.stringify(competencesArray));
-
-      // ✅ Envoyer avec axios
-      const response = await api.post('/candidatures', formData);
-
-      console.log('✅ Candidature envoyée:', response.data);
-      setSuccess(true);
-
-    } catch (err: any) {
-      console.error('❌ Erreur:', err);
-      setErreur(err.response?.data?.erreur || 'Erreur lors de l\'envoi. Veuillez réessayer.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Écran succès
-  if (success) {
-    return (
-      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl w-full max-w-md shadow-xl p-8 text-center">
-          <div className="w-16 h-16 bg-[#d8f3dc] rounded-full flex items-center justify-center mx-auto mb-4">
-            <CheckCircle className="w-8 h-8 text-[#2d6a4f]" />
-          </div>
-          <h2 className="text-xl font-bold text-[#1a1a1a] mb-2">
-            Candidature envoyée !
-          </h2>
-          <p className="text-sm text-[#6b7280] mb-6">
-            Votre candidature pour <strong>{offre.titre}</strong> a bien été reçue.
-            Notre équipe RH vous contactera prochainement.
-          </p>
-          <button
-            onClick={() => { onSuccess(); onClose(); }}
-            className="w-full bg-[#2d6a4f] hover:bg-[#1b4332] text-white py-3 rounded-xl font-semibold transition-colors"
-          >
-            Fermer
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto">
-
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-[#e5e0d8] sticky top-0 bg-white z-10">
-          <div>
-            <p className="text-xs text-[#6b7280] mb-0.5">Postuler pour</p>
-            <h2 className="font-bold text-lg text-[#1a1a1a]">{offre.titre}</h2>
-            <p className="text-sm text-[#2d6a4f]">{offre.departement} • {offre.type}</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-[#f5f0e8] rounded-xl">
-            <X className="w-5 h-5 text-[#6b7280]" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          {erreur && (
-            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
-              {erreur}
-            </div>
-          )}
-
-          {/* Infos personnelles */}
-          <div>
-            <h3 className="text-sm font-semibold text-[#1a1a1a] mb-3">
-              Informations personnelles
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">Prénom *</label>
-                <input
-                  required
-                  value={form.prenom}
-                  onChange={e => setForm({ ...form, prenom: e.target.value })}
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">Nom *</label>
-                <input
-                  required
-                  value={form.nom}
-                  onChange={e => setForm({ ...form, nom: e.target.value })}
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">Email *</label>
-                <input
-                  required
-                  type="email"
-                  value={form.email}
-                  onChange={e => setForm({ ...form, email: e.target.value })}
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">Téléphone</label>
-                <input
-                  type="tel"
-                  value={form.telephone}
-                  onChange={e => setForm({ ...form, telephone: e.target.value })}
-                  placeholder="+216 XX XXX XXX"
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* ✅ Upload CV */}
-          <div>
-            <h3 className="text-sm font-semibold text-[#1a1a1a] mb-3 flex items-center gap-2">
-              📄 Curriculum Vitae *
-            </h3>
-            
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.doc,.docx"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-
-            {!cvFile ? (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full border-2 border-dashed border-[#e5e0d8] rounded-xl p-6 hover:border-[#2d6a4f] hover:bg-[#f5f0e8] transition-all text-center"
-              >
-                <div className="flex flex-col items-center gap-2">
-                  <Upload className="w-8 h-8 text-[#2d6a4f]" />
-                  <div>
-                    <p className="text-sm font-medium text-[#1a1a1a]">
-                      Cliquez pour télécharger votre CV
-                    </p>
-                    <p className="text-xs text-[#6b7280] mt-1">
-                      PDF ou DOCX (max 5 MB)
-                    </p>
-                  </div>
-                </div>
-              </button>
-            ) : (
-              <div className="flex items-center justify-between bg-[#d8f3dc] border border-[#2d6a4f]/20 rounded-xl p-4">
-                <div className="flex items-center gap-3">
-                  <FileText className="w-8 h-8 text-[#2d6a4f]" />
-                  <div>
-                    <p className="text-sm font-medium text-[#1a1a1a]">{cvPreview}</p>
-                    <p className="text-xs text-[#6b7280]">
-                      {(cvFile.size / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCvFile(null);
-                    setCvPreview('');
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}
-                  className="text-red-500 hover:text-red-700 p-1"
-                  title="Supprimer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Parcours */}
-          <div>
-            <h3 className="text-sm font-semibold text-[#1a1a1a] mb-3">Parcours</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">Niveau d'étude</label>
-                <select
-                  value={form.niveauEtude}
-                  onChange={e => setForm({ ...form, niveauEtude: e.target.value })}
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                >
-                  <option value="">Sélectionner...</option>
-                  {['Bac','Bac+2','Licence (Bac+3)','Master (Bac+5)','Doctorat'].map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">Expérience</label>
-                <select
-                  value={form.experience}
-                  onChange={e => setForm({ ...form, experience: e.target.value })}
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                >
-                  <option value="">Sélectionner...</option>
-                  {['Débutant','1-2 ans','3-5 ans','5-10 ans','10+ ans'].map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            
-            <div className="mt-3">
-              <label className="text-xs font-medium text-[#6b7280] block mb-1">
-                Compétences <span className="text-[#9ca3af]">(séparées par des virgules)</span>
-              </label>
-              <input
-                value={form.competences}
-                onChange={e => setForm({ ...form, competences: e.target.value })}
-                placeholder="React, Node.js, DynamoDB..."
-                className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-              />
-            </div>
-
-            {/* Liens professionnels */}
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">
-                  LinkedIn (optionnel)
-                </label>
-                <input
-                  type="url"
-                  value={form.linkedin}
-                  onChange={e => setForm({ ...form, linkedin: e.target.value })}
-                  placeholder="https://linkedin.com/in/..."
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[#6b7280] block mb-1">
-                  Portfolio (optionnel)
-                </label>
-                <input
-                  type="url"
-                  value={form.portfolio}
-                  onChange={e => setForm({ ...form, portfolio: e.target.value })}
-                  placeholder="https://monportfolio.com"
-                  className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f]"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Lettre motivation */}
-          <div>
-            <h3 className="text-sm font-semibold text-[#1a1a1a] mb-3">
-              Lettre de motivation *
-            </h3>
-            <textarea
-              required
-              rows={6}
-              value={form.lettreMotivation}
-              onChange={e => setForm({ ...form, lettreMotivation: e.target.value })}
-              placeholder="Expliquez pourquoi vous êtes le candidat idéal pour ce poste..."
-              maxLength={2000}
-              className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f] resize-none"
-            />
-            <p className="text-xs text-[#9ca3af] mt-1 text-right">
-              {form.lettreMotivation.length} / 2000 caractères
-            </p>
-          </div>
-
-          {/* Actions */}
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 border border-[#e5e0d8] rounded-xl py-3 text-sm font-medium hover:bg-[#f5f0e8] transition-colors"
-            >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !cvFile}
-              className="flex-1 bg-[#2d6a4f] hover:bg-[#1b4332] text-white rounded-xl py-3 text-sm font-semibold transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Envoi en cours...
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4" />
-                  Envoyer ma candidature
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// ── Card Offre ────────────────────────────────
-function OffreCard({
-  offre,
-  onPostuler,
-}: {
-  offre: Offre;
+  dejaPostule: boolean;
   onPostuler: (o: Offre) => void;
+  onOuvrir: (o: Offre) => void;
+  delai: number;
 }) {
-  const daysSince = Math.floor(
-    (Date.now() - new Date(offre.creeLe).getTime()) / 86400000
-  );
+  const jours = Math.floor((Date.now() - new Date(offre.creeLe).getTime()) / 86400000);
+  const fermee = estFermee(offre);
+  const urgente = estUrgente(offre);
 
   return (
-    <div className="bg-white rounded-2xl border border-[#e5e0d8] p-6 hover:shadow-md transition-all group">
-      {/* Header */}
-      <div className="flex items-start justify-between mb-4">
-        <div className="w-12 h-12 bg-[#d8f3dc] rounded-xl flex items-center justify-center">
-          <Briefcase className="w-6 h-6 text-[#2d6a4f]" />
+    // Toute la carte ouvre le détail. Le bouton « Postuler » arrête la
+    // propagation : sans cela, un clic dessus ferait les deux.
+    <div
+      onClick={() => onOuvrir(offre)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOuvrir(offre);
+        }
+      }}
+      style={{ animationDelay: `${delai}ms` }}
+      className={`hrup-monter hrup-carte ${CARTE} p-5 sm:p-6 hover:shadow-md hover:border-brand-500/30 flex flex-col group cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500/40`}
+    >
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="w-11 h-11 bg-brand-500/10 rounded-xl flex items-center justify-center shrink-0">
+          <Briefcase className="w-5 h-5 text-brand-texte" />
         </div>
-        <div className="flex items-center gap-2">
-          <StatutBadge statut={offre.statut} />
-          <TypeBadge type={offre.type} />
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {dejaPostule && (
+            <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full bg-stone-100 text-stone-500">
+              <Check className="w-3 h-3" />
+              Déjà postulé
+            </span>
+          )}
+          {urgente && (
+            <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full bg-red-50 text-red-500">
+              <Flame className="w-3 h-3" />
+              Urgent
+            </span>
+          )}
+          <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${styleType(offre.type).bg} ${styleType(offre.type).text}`}>
+            {offre.type}
+          </span>
         </div>
       </div>
 
-      {/* Titre */}
-      <h3 className="font-bold text-[#1a1a1a] text-lg mb-1 group-hover:text-[#2d6a4f] transition-colors">
+      <h3 className="font-bold text-stone-800 text-base mb-1 line-clamp-2 group-hover:text-brand-texte transition-colors">
         {offre.titre}
       </h3>
 
-      {/* Meta */}
-      <div className="flex items-center gap-4 text-xs text-[#6b7280] mb-4">
+      <div className="flex items-center gap-3 text-xs text-stone-500 mb-4 flex-wrap">
         <span className="flex items-center gap-1">
           <Briefcase className="w-3.5 h-3.5" />
           {offre.departement}
         </span>
         <span className="flex items-center gap-1">
           <MapPin className="w-3.5 h-3.5" />
-          {offre.modeTravail}
+          {offre.lieu || offre.modeTravail}
         </span>
         <span className="flex items-center gap-1">
           <Clock className="w-3.5 h-3.5" />
-          {daysSince === 0 ? "Aujourd'hui" : `Il y a ${daysSince}j`}
+          {jours === 0 ? "Aujourd'hui" : `Il y a ${jours} j`}
         </span>
       </div>
 
-      {/* Description */}
-      <p className="text-sm text-[#6b7280] line-clamp-3 mb-5 leading-relaxed">
-        {offre.description || 'Rejoignez notre équipe dynamique pour ce poste passionnant.'}
+      <p className="text-sm text-stone-600 line-clamp-3 mb-5 leading-relaxed flex-1">
+        {offre.description || 'Aucune description fournie pour cette offre.'}
       </p>
 
-      {/* Footer */}
-      <div className="flex items-center justify-between pt-4 border-t border-[#f0ebe0]">
-        <span className="text-xs text-[#9ca3af]">
-          Publié le {new Date(offre.creeLe).toLocaleDateString('fr-FR')}
+      <div className="flex items-center justify-between gap-2 pt-4 border-t border-stone-100">
+        <span className="flex items-center gap-1 text-xs font-bold text-brand-texte group-hover:underline">
+          Détails
+          <ChevronRight className="w-3.5 h-3.5" />
         </span>
+
         <button
-          onClick={() => onPostuler(offre)}
-          disabled={offre.statut === 'fermee'}
-          className="flex items-center gap-2 bg-[#2d6a4f] hover:bg-[#1b4332] disabled:bg-gray-200 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+          onClick={(e) => { e.stopPropagation(); onPostuler(offre); }}
+          disabled={fermee || dejaPostule}
+          className="flex items-center gap-1.5 bg-brand-500 hover:bg-brand-600 disabled:bg-stone-200 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors shrink-0"
         >
-          {offre.statut === 'fermee' ? 'Fermée' : 'Postuler'}
-          {offre.statut !== 'fermee' && <ChevronRight className="w-4 h-4" />}
+          {fermee ? 'Fermée' : dejaPostule ? 'Envoyée' : (
+            <>
+              <Send className="w-3.5 h-3.5" />
+              Postuler
+            </>
+          )}
         </button>
       </div>
     </div>
   );
 }
 
-// ── Page principale ───────────────────────────
-export default function JobsPage() {
-  const [offres,          setOffres]          = useState<Offre[]>([]);
-  const [loading,         setLoading]         = useState(true);
-  const [search,          setSearch]          = useState('');
-  const [filterType,      setFilterType]      = useState('Tous');
-  const [filterMode,      setFilterMode]      = useState('Tous');
-  const [offreSelectionnee, setOffreSelectionnee] = useState<Offre | null>(null);
+// ── Page ───────────────────────────────────────────────────────────
 
-  const types = ['Tous', 'CDI', 'CDD', 'Stage', 'Freelance'];
-  const modes = ['Tous', 'On-site', 'Hybrid', 'Remote'];
+export default function JobsPage() {
+  const navigate = useNavigate();
+  const [parametres, setParametres] = useSearchParams();
+
+  const [offres, setOffres] = useState<Offre[]>([]);
+  const [postulees, setPostulees] = useState<Set<string>>(new Set());
+  const [chargement, setChargement] = useState(true);
+  const [recherche, setRecherche] = useState('');
+  const [filtreType, setFiltreType] = useState('Tous');
+  const [filtreMode, setFiltreMode] = useState('Tous');
+  const [page, setPage] = useState(0);
+  const [offreChoisie, setOffreChoisie] = useState<Offre | null>(null);
+  const [toast, setToast] = useState('');
+
+  const TYPES = ['Tous', 'CDI', 'CDD', 'STAGE', 'ALTERNANCE'];
+  const MODES = ['Tous', 'PRESENTIEL', 'HYBRIDE', 'DISTANCIEL'];
+
+  // La page Recommandations envoie ici avec ?offre=ID. Le paramètre
+  // était ignoré : on arrivait sur la liste complète sans rien voir
+  // de l'offre choisie. Il mène maintenant au détail.
+  useEffect(() => {
+    const cible = parametres.get('offre');
+    if (!cible) return;
+    parametres.delete('offre');
+    setParametres(parametres, { replace: true });
+    navigate(`/candidat/offres/${cible}`, { replace: true });
+  }, [parametres, navigate, setParametres]);
 
   const charger = async () => {
     try {
-      setLoading(true);
-      const res = await api.get('/offres');
-      const data = res?.data?.offres ?? res?.data ?? [];
-      setOffres(data.filter((o: Offre) => o.statut !== 'fermee'));
+      setChargement(true);
+
+      // Les candidatures servent uniquement à savoir ce qui a déjà
+      // été envoyé ; leur échec ne doit pas masquer les offres.
+      const [resOffres, resCand] = await Promise.allSettled([
+        api.get('/offres') as any,
+        api.get('/mes-candidatures') as any,
+      ]);
+
+      if (resOffres.status === 'fulfilled') {
+        const liste: Offre[] = resOffres.value?.data?.offres ?? resOffres.value?.data ?? [];
+        // Seules les offres ouvertes ont leur place dans l'espace candidat.
+        setOffres(liste.filter((o) => !estFermee(o)));
+      }
+
+      if (resCand.status === 'fulfilled') {
+        const liste: { offreId?: string }[] = resCand.value?.data?.candidatures ?? [];
+        setPostulees(new Set(liste.map((c) => String(c.offreId)).filter(Boolean)));
+      }
     } catch (e) {
-      console.error(e);
+      console.error('Chargement des offres :', e);
     } finally {
-      setLoading(false);
+      setChargement(false);
     }
   };
 
   useEffect(() => { charger(); }, []);
+  useEffect(() => { setPage(0); }, [recherche, filtreType, filtreMode]);
 
-  const filtered = offres.filter(o => {
-    const matchSearch = o.titre.toLowerCase().includes(search.toLowerCase()) ||
-      o.departement.toLowerCase().includes(search.toLowerCase());
-    const matchType = filterType === 'Tous' || o.type === filterType;
-    const matchMode = filterMode === 'Tous' || o.modeTravail === filterMode;
-    return matchSearch && matchType && matchMode;
-  });
+  const filtrees = useMemo(() => {
+    const terme = recherche.trim().toLowerCase();
+    return offres
+      .filter((o) => {
+        if (filtreType !== 'Tous' && o.type !== filtreType) return false;
+        if (filtreMode !== 'Tous' && o.modeTravail !== filtreMode) return false;
+        if (!terme) return true;
+        return `${o.titre} ${o.departement} ${o.type}`.toLowerCase().includes(terme);
+      })
+      // Les urgentes d'abord, puis la plus récente.
+      .sort((a, b) => {
+        const au = estUrgente(a);
+        const bu = estUrgente(b);
+        if (au !== bu) return au ? -1 : 1;
+        return String(b.creeLe).localeCompare(String(a.creeLe));
+      });
+  }, [offres, recherche, filtreType, filtreMode]);
+
+  const pageCourante = useMemo(
+    () => filtrees.slice(page * PAR_PAGE, (page + 1) * PAR_PAGE),
+    [filtrees, page]
+  );
+
+  const nbUrgentes = filtrees.filter(estUrgente).length;
+  const filtreActif = filtreType !== 'Tous' || filtreMode !== 'Tous' || Boolean(recherche);
 
   return (
-    <Layout searchPlaceholder="Rechercher une offre...">
-      <div>
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-[#1a1a1a]">
-            Opportunités d'emploi
-          </h1>
-          <p className="text-sm text-[#6b7280] mt-1">
-            {loading ? '...' : `${filtered.length} offre${filtered.length > 1 ? 's' : ''} disponible${filtered.length > 1 ? 's' : ''}`}
-          </p>
-        </div>
+    <div className="min-h-screen">
+      <Layout searchPlaceholder="Rechercher une offre…">
 
-        {/* Filtres */}
-        <div className="flex items-center gap-3 mb-6 flex-wrap">
-          {/* Search */}
-          <div className="relative flex-1 min-w-50">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9ca3af]" />
-            <input
-              type="text"
-              placeholder="Rechercher un poste, département..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2.5 border border-[#e5e0d8] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2d6a4f]/30"
-            />
-          </div>
+        <EnTete
+          fil={['Espace candidat', "Offres d'emploi"]}
+          titre="Opportunités d'emploi"
+          sousTitre={chargement ? 'Chargement…' : (
+            <>
+              {filtrees.length} offre{filtrees.length > 1 ? 's' : ''} disponible
+              {filtrees.length > 1 ? 's' : ''}
+              {nbUrgentes > 0 && (
+                <span className="text-red-500 font-semibold">
+                  {' · '}{nbUrgentes} urgente{nbUrgentes > 1 ? 's' : ''}
+                </span>
+              )}
+            </>
+          )}
+        >
+          {filtreActif && (
+            <button
+              onClick={() => {
+                setFiltreType('Tous');
+                setFiltreMode('Tous');
+                setRecherche('');
+              }}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border border-stone-200 bg-surface text-stone-600 hover:bg-stone-50 transition-colors"
+            >
+              <X className="w-4 h-4" />
+              Réinitialiser
+            </button>
+          )}
+        </EnTete>
 
-          {/* Type */}
-          <div className="flex items-center gap-1 bg-white border border-[#e5e0d8] rounded-xl p-1">
-            {types.map(t => (
-              <button
-                key={t}
-                onClick={() => setFilterType(t)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                  filterType === t
-                    ? 'bg-[#2d6a4f] text-white'
-                    : 'text-[#6b7280] hover:text-[#374151]'
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+        <div className="px-4 sm:px-8 py-6 sm:py-8">
 
-          {/* Mode */}
-          <div className="flex items-center gap-1 bg-white border border-[#e5e0d8] rounded-xl p-1">
-            {modes.map(m => (
-              <button
-                key={m}
-                onClick={() => setFilterMode(m)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                  filterMode === m
-                    ? 'bg-[#2d6a4f] text-white'
-                    : 'text-[#6b7280] hover:text-[#374151]'
-                }`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
+          {/* ── Filtres ── */}
+          {/* Une seule bande blanche, d'un bord à l'autre.
+              
+              Elle n'a aucune marge horizontale, et c'est voulu : la
+              grille intérieure reprend celle des offres, donc chaque
+              groupe se cale exactement sur la carte qui lui
+              correspond. Une marge, même de huit pixels, décalerait
+              les trois colonnes et l'alignement tomberait. Le retrait
+              visuel vient du contenu lui-même — la loupe est à douze
+              pixels du bord, les boutons ont leur propre padding. */}
+          <div className={`${CARTE} py-2 mb-5`}>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
 
-          <button className="flex items-center gap-2 border border-[#e5e0d8] bg-white text-[#374151] px-4 py-2.5 rounded-xl text-sm hover:bg-[#f5f0e8]">
-            <SlidersHorizontal className="w-4 h-4" />
-            Filtres avancés
-          </button>
-        </div>
-
-        {/* Grille offres */}
-        {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-            {[...Array(6)].map((_, i) => (
-              <div key={i} className="bg-white rounded-2xl border border-[#e5e0d8] p-6 animate-pulse">
-                <div className="w-12 h-12 bg-gray-100 rounded-xl mb-4" />
-                <div className="h-5 bg-gray-100 rounded w-3/4 mb-2" />
-                <div className="h-3 bg-gray-100 rounded w-1/2 mb-4" />
-                <div className="h-16 bg-gray-100 rounded mb-4" />
-                <div className="h-9 bg-gray-100 rounded-xl" />
+              <div className="relative">
+                <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
+                <input
+                  value={recherche}
+                  onChange={(e) => setRecherche(e.target.value)}
+                  placeholder="Titre, département…"
+                  className="w-full h-9 ps-9 pe-8 rounded-xl bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none focus:bg-stone-50 transition-colors"
+                />
+                {recherche && (
+                  <button
+                    onClick={() => setRecherche('')}
+                    aria-label="Effacer la recherche"
+                    className="absolute end-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-md hover:bg-stone-100"
+                  >
+                    <X className="w-3.5 h-3.5 text-stone-400" />
+                  </button>
+                )}
               </div>
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-20">
-            <div className="text-5xl mb-4">🔍</div>
-            <h3 className="font-semibold text-[#1a1a1a] mb-2">Aucune offre trouvée</h3>
-            <p className="text-sm text-[#6b7280]">
-              Essayez d'autres mots-clés ou filtres.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-            {filtered.map(offre => (
-              <OffreCard
-                key={offre.id}
-                offre={offre}
-                onPostuler={setOffreSelectionnee}
-              />
-            ))}
-          </div>
-        )}
-      </div>
 
-      {/* Modal Postuler */}
-      {offreSelectionnee && (
-        <ModalPostuler
-          offre={offreSelectionnee}
-          onClose={() => setOffreSelectionnee(null)}
-          onSuccess={charger}
-        />
-      )}
-    </Layout>
+              {/* Les boutons gardent leur largeur naturelle et se
+                  répartissent sur toute la colonne. À parts égales,
+                  « ALTERNANCE » était coupé pour que « Tous » ait la
+                  même place que lui. */}
+              {([
+                [TYPES, filtreType, setFiltreType, 'Type de contrat'],
+                [MODES, filtreMode, setFiltreMode, 'Mode de travail'],
+              ] as [string[], string, (v: string) => void, string][])
+                .map(([liste, choisi, choisir, libelle]) => (
+                  <div
+                    key={libelle}
+                    role="group"
+                    aria-label={libelle}
+                    // Un filet dans la gouttière sépare les deux
+                    // groupes. Sur une bande d'un seul tenant,
+                    // « ALTERNANCE » et le « Tous » suivant se
+                    // touchaient sans qu'on voie où l'un finit.
+                    // Positionné en absolu : il ne décale rien.
+                    className="relative flex items-center justify-between gap-0.5 h-9
+                      xl:before:content-[''] xl:before:absolute xl:before:-start-2.5
+                      xl:before:top-0 xl:before:bottom-0 xl:before:w-px xl:before:bg-stone-200"
+                  >
+                    {liste.map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => choisir(v)}
+                        title={v === 'Tous' ? `${libelle} : tous` : v}
+                        className={`min-w-0 h-full px-2 rounded-xl text-[11px] font-bold truncate transition-colors ${
+                          choisi === v
+                            ? 'bg-brand-500 text-white shadow-sm'
+                            : 'text-stone-500 hover:bg-stone-50 hover:text-stone-800'
+                        }`}
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          {/* ── Grille ── */}
+          {chargement ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className={`${CARTE} p-6 animate-pulse`}>
+                  <div className="w-11 h-11 bg-stone-100 rounded-xl mb-4" />
+                  <div className="h-5 bg-stone-100 rounded w-3/4 mb-2" />
+                  <div className="h-3 bg-stone-100 rounded w-1/2 mb-4" />
+                  <div className="h-16 bg-stone-50 rounded mb-4" />
+                  <div className="h-9 bg-stone-50 rounded-xl" />
+                </div>
+              ))}
+            </div>
+          ) : filtrees.length === 0 ? (
+            <Vide
+              icone={Briefcase}
+              message={filtreActif ? 'Aucune offre ne correspond' : 'Aucune offre disponible'}
+              detail={filtreActif
+                ? "Essayez d'autres mots-clés, ou élargissez les filtres."
+                : 'Revenez bientôt : de nouvelles offres sont publiées régulièrement.'}
+              action={!filtreActif && (
+                <button
+                  onClick={() => navigate('/candidat/candidature-spontanee')}
+                  className="bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-colors"
+                >
+                  Envoyer une candidature spontanée
+                </button>
+              )}
+            />
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 mb-5">
+                {pageCourante.map((offre, i) => (
+                  <CarteOffre
+                    key={offre.id}
+                    offre={offre}
+                    dejaPostule={postulees.has(String(offre.id))}
+                    onPostuler={setOffreChoisie}
+                    onOuvrir={(o) => navigate(`/candidat/offres/${o.id}`)}
+                    delai={i * 60}
+                  />
+                ))}
+              </div>
+
+              {filtrees.length > PAR_PAGE && (
+                <div className={`${CARTE} overflow-hidden`}>
+                  <Pagination
+                    page={page}
+                    taillePage={PAR_PAGE}
+                    total={filtrees.length}
+                    onPage={setPage}
+                    libelle="offre"
+                    accent={ACCENT}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {offreChoisie && (
+          <ModalPostuler
+            offre={offreChoisie}
+            onClose={() => setOffreChoisie(null)}
+            onSucces={() => {
+              setToast('Votre candidature a été envoyée');
+              charger();
+            }}
+          />
+        )}
+
+        {toast && <Toast message={toast} onClose={() => setToast('')} />}
+
+        <style>{STYLES_ANIMATION}</style>
+      </Layout>
+    </div>
   );
 }

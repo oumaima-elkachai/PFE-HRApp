@@ -57,10 +57,22 @@ const authentifier = (req, res, next) => {
     return res.status(401).json({ succes: false, erreur: "Jeton manquant" });
   }
 
+  const jeton = entete.split(" ")[1];
+
   try {
-    req.user = jwt.verify(entete.split(" ")[1], JWT_SECRET);
+    req.user = jwt.verify(jeton, JWT_SECRET);
     return next();
   } catch {
+    // En developpement uniquement : accepte un jeton Cognito sans
+    // verifier sa signature. Sur AWS, cette branche est morte puisque
+    // la passerelle a deja valide le jeton avant l'invocation.
+    if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
+      const charge = jwt.decode(jeton);
+      if (charge?.sub && charge?.email) {
+        req.user = depuisCognito(charge);
+        return next();
+      }
+    }
     return res.status(401).json({ succes: false, erreur: "Jeton invalide ou expiré" });
   }
 };
@@ -75,4 +87,31 @@ const autoriser = (...rolesAutorises) => (req, res, next) => {
   next();
 };
 
-module.exports = { authentifier, autoriser, normaliserGroupes, depuisCognito };
+/**
+ * Renseigne req.user si un jeton valide est present, sans jamais
+ * rejeter la requete. Utile pour une route publique dont le
+ * comportement s'enrichit quand le visiteur est identifie.
+ */
+const authentifierOptionnel = (req, res, next) => {
+  const claims = req.evenementLambda?.requestContext?.authorizer?.jwt?.claims;
+  if (claims) {
+    req.user = depuisCognito(claims);
+    return next();
+  }
+
+  const entete = req.headers["authorization"];
+  if (!entete?.startsWith("Bearer ")) return next();
+
+  const jeton = entete.split(" ")[1];
+  try {
+    req.user = jwt.verify(jeton, JWT_SECRET);
+  } catch {
+    if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
+      const charge = jwt.decode(jeton);
+      if (charge?.sub && charge?.email) req.user = depuisCognito(charge);
+    }
+  }
+  next();
+};
+
+module.exports = { authentifier, autoriser, normaliserGroupes, depuisCognito, authentifierOptionnel };

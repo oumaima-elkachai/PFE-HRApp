@@ -1,8 +1,20 @@
+// src/employes/supprimer.js
+// DELETE /employes/:id
+//
+// On archive au lieu de supprimer physiquement (bonne pratique RH) :
+// les pointages, bulletins et congés du salarié restent rattachés à
+// une fiche existante, et l'historique reste lisible.
+//
+// Le gabarit biométrique, lui, est bel et bien supprimé. C'est la
+// seule donnée du dossier qui n'a plus aucune base légale dès que le
+// salarié quitte les effectifs : l'archive sert à conserver un
+// historique, pas à garder un visage reconnaissable.
+
 const { UpdateCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 const { docClient } = require("../utils/dynamodb");
 const { succes, erreur, nonTrouve } = require("../utils/reponse");
+const biometrie = require("../biometrie/biometrie");
 
-// On archive au lieu de supprimer physiquement (bonne pratique RH)
 exports.handler = async (event) => {
   try {
     const id = event.pathParameters?.id;
@@ -29,6 +41,19 @@ exports.handler = async (event) => {
         ":date":   new Date().toISOString(),
       },
     }));
+
+    // ── Purge du gabarit facial ──
+    //
+    // Placée APRÈS l'archivage, jamais avant : si l'écriture
+    // ci-dessus échoue, on ne veut pas avoir déjà effacé le gabarit
+    // d'un salarié toujours en poste.
+    //
+    // purger() ne lève pas — l'absence de gabarit (salarié jamais
+    // enrôlé, ce qui sera le cas de la plupart) n'est pas une erreur.
+    // Et un échec de purge ne doit pas faire échouer l'archivage :
+    // mieux vaut un gabarit orphelin signalé dans les journaux qu'une
+    // fiche à moitié archivée.
+    await biometrie.purger(id);
 
     return succes({
       message: `Employe ${existant.Item.prenom} ${existant.Item.nom} archive avec succes`,

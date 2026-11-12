@@ -398,7 +398,7 @@ function genererPDF(d) {
     const VERT = "#2d6a4f", BEIGE = "#f5f0e8", GRIS = "#6b7280", NOIR = "#1a1a1a", W = 515;
 
     doc.rect(40, 40, W, 80).fill(VERT);
-    doc.fillColor("white").fontSize(20).font("Helvetica-Bold").text("TERRA HR", 55, 55);
+    doc.fillColor("white").fontSize(20).font("Helvetica-Bold").text("HR UP", 55, 55);
     doc.fontSize(10).font("Helvetica").text("Bulletin de salaire", 55, 80);
     doc.fontSize(10)
       .text(`${MOIS_LABELS[d.mois]} ${d.annee}`, 400, 55, { align: "right", width: 150 })

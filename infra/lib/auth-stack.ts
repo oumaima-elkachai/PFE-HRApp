@@ -121,9 +121,9 @@ exports.handler = async (event) => {
       accountRecovery: AccountRecovery.EMAIL_ONLY,
 
       userVerification: {
-        emailSubject: "TERRA HR — confirmez votre adresse",
+        emailSubject: "HR UP — confirmez votre adresse",
         emailBody:
-          "Bienvenue sur TERRA HR.\n\nVotre code de confirmation : {####}",
+          "Bienvenue sur HR UP.\n\nVotre code de confirmation : {####}",
       },
 
       lambdaTriggers: { postConfirmation: rattachementGroupe },
@@ -164,7 +164,7 @@ exports.handler = async (event) => {
 
     // ── Domaine de connexion ──────────────────────────────────────
     // Page de connexion hébergée par AWS, personnalisable aux couleurs
-    // de TERRA HR. Le préfixe doit être unique au niveau mondial.
+    // de HR UP. Le préfixe doit être unique au niveau mondial.
     this.domaine = this.pool.addDomain("DomaineConnexion", {
       cognitoDomain: { domainPrefix: `pferh-${etape.nom}-${this.account}` },
     });

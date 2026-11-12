@@ -1,7 +1,7 @@
 // src/conges/traiter.js
 // PATCH /conges/:id
 
-const { UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { UpdateCommand, QueryCommand } = require("@aws-sdk/lib-dynamodb");
 const { docClient } = require("../utils/dynamodb");
 const { succes, erreur } = require("../utils/reponse");
 const { identite, estRole } = require("../utils/contexte");
@@ -10,6 +10,7 @@ const { PutCommand } = require("@aws-sdk/lib-dynamodb");
 
 const TABLE_CONGES = process.env.TABLE_CONGES || "Conges-local";
 const TABLE_NOTIFICATIONS = process.env.TABLE_NOTIFICATIONS || "Notifications-local";
+const TABLE_POINTAGES = process.env.TABLE_POINTAGES || "Pointages-local";
 
 // Statuts en majuscules, conformes à ce que produit la migration et à ce
 // qu'attend le calcul de paie. Les variantes minuscules sont acceptées en
@@ -18,6 +19,52 @@ const CORRESPONDANCE = {
   approuve: "APPROUVE", APPROUVE: "APPROUVE",
   refuse: "REFUSE", REFUSE: "REFUSE",
 };
+
+/**
+ * Jours de la période où le salarié a déjà pointé.
+ *
+ * ── Pourquoi ce contrôle existe ─────────────────────────────────────
+ *
+ * Le pointage refuse désormais un salarié en congé accordé. Le trou
+ * symétrique restait ouvert : accorder un congé sur des jours déjà
+ * pointés produit exactement l'incohérence que ce refus évite — une
+ * journée travaillée ET un jour de congé décompté pour la même date,
+ * donc une paie fausse des deux côtés.
+ *
+ * ── Pourquoi il avertit au lieu de bloquer ──────────────────────────
+ *
+ * La RH a le droit de trancher. Le pointage peut être une erreur, le
+ * salarié peut être venu une heure avant de partir, le congé peut être
+ * rétroactif et légitime. Refuser la validation mettrait la RH dans une
+ * impasse sans lui dire quoi faire.
+ *
+ * Elle est donc informée, avec les dates, et décide. Un échec de ce
+ * contrôle ne remonte pas non plus : il ne doit jamais empêcher une
+ * décision que la RH a le droit de prendre.
+ */
+async function joursDejaPointes(employeId, dateDebut, dateFin) {
+  try {
+    const res = await docClient.send(new QueryCommand({
+      TableName: TABLE_POINTAGES,
+      KeyConditionExpression: "employeId = :e AND #d BETWEEN :debut AND :fin",
+      ExpressionAttributeNames: { "#d": "date" },
+      ExpressionAttributeValues: {
+        ":e": employeId,
+        ":debut": String(dateDebut).slice(0, 10),
+        ":fin": String(dateFin ?? dateDebut).slice(0, 10),
+      },
+    }));
+
+    // Une journée sans segment est une ligne vide, pas un pointage.
+    return (res.Items ?? [])
+      .filter((j) => Array.isArray(j.segments) && j.segments.length > 0)
+      .map((j) => j.date)
+      .sort();
+  } catch (e) {
+    console.error("Contrôle des pointages sur la période impossible :", e);
+    return [];
+  }
+}
 
 exports.handler = async (event) => {
   try {
@@ -69,6 +116,32 @@ exports.handler = async (event) => {
 
     const conge = resultat.Attributes;
 
+    // ── Jours déjà pointés ──
+    //
+    // Après la décision, jamais avant : la validation est acquise, et
+    // ce contrôle ne doit pas pouvoir la faire échouer. Il ne sert qu'à
+    // informer.
+    let avertissement = "";
+    let conflits = [];
+
+    if (nouveauStatut === "APPROUVE") {
+      conflits = await joursDejaPointes(conge.employeId, conge.dateDebut, conge.dateFin);
+
+      if (conflits.length > 0) {
+        const enFrancais = (iso) =>
+          new Date(`${iso}T12:00:00`).toLocaleDateString("fr-FR", {
+            day: "numeric", month: "long",
+          });
+
+        const liste = conflits.slice(0, 5).map(enFrancais).join(", ");
+        const reste = conflits.length > 5 ? ` et ${conflits.length - 5} autre(s)` : "";
+
+        avertissement =
+          ` Attention : ${conflits.length} jour(s) de cette période sont déjà pointés`
+          + ` (${liste}${reste}). Vérifiez la paie du mois.`;
+      }
+    }
+
     // Notification à l'employé. Un échec ici ne doit pas annuler la
     // décision, qui est déjà enregistrée.
     try {
@@ -94,7 +167,12 @@ exports.handler = async (event) => {
 
     return succes({
       conge,
-      message: `Demande ${nouveauStatut === "APPROUVE" ? "approuvée" : "refusée"}`,
+      // Les dates en conflit sont renvoyées à part, pas seulement dans
+      // la phrase : l'interface RH pourra les surligner sans avoir à
+      // analyser un message destiné à être lu.
+      joursDejaPointes: conflits,
+      message: `Demande ${nouveauStatut === "APPROUVE" ? "approuvée" : "refusée"}`
+        + avertissement,
     });
 
   } catch (e) {

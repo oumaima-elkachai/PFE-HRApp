@@ -6,12 +6,12 @@ interface BadgeProps {
 }
 
 const variantClasses = {
-  green: 'bg-[#d8f3dc] text-[#2d6a4f] border border-[#b7e4c7]',
-  blue: 'bg-[#dbeafe] text-[#1e40af] border border-[#bfdbfe]',
-  amber: 'bg-[#fef3c7] text-[#92400e] border border-[#fde68a]',
-  red: 'bg-[#fee2e2] text-[#991b1b] border border-[#fecaca]',
-  gray: 'bg-[#f3f4f6] text-[#374151] border border-[#e5e7eb]',
-  olive: 'bg-[#2d6a4f] text-white',
+  green: 'bg-brand-100 text-brand-texte border border-[#b7e4c7]',
+  blue: 'bg-blue-100 text-[#1e40af] border border-[#bfdbfe]',
+  amber: 'bg-amber-100 text-[#92400e] border border-[#fde68a]',
+  red: 'bg-red-100 text-[#991b1b] border border-[#fecaca]',
+  gray: 'bg-stone-100 text-stone-700 border border-stone-200',
+  olive: 'bg-brand-600 text-white',
 };
 
 const sizeClasses = {

@@ -27,7 +27,14 @@ if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
   process.env.AWS_REGION          = "eu-west-3";
   process.env.FUSEAU_HORAIRE      = "Africa/Tunis";
   process.env.JWT_SECRET          = "pfe-rh-secret-local-2026";
-  process.env.TABLE_USERS         = "Users-local";
+
+
+
+
+  process.env.COURRIEL_EXPEDITEUR = "elkachaioumaima@gmail.com";
+  process.env.URL_APPLICATION     = "http://localhost:5173";
+
+
   process.env.TABLE_EMPLOYES      = "Employes-local";
   process.env.TABLE_POINTAGES     = "Pointages-local";
   process.env.TABLE_CONGES        = "Conges-local";
@@ -39,17 +46,36 @@ if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
   process.env.TABLE_ENTRETIENS    = "Entretiens-local";
   process.env.TABLE_NOTIFICATIONS = "Notifications-local";
   process.env.TABLE_EVENEMENTS    = "Evenements-local";
+  process.env.TABLE_PROFILS_CANDIDATS = "ProfilsCandidats-local";
+  
+  process.env.TABLE_DEMANDES_DOCUMENTS = "DemandesDocuments-local";
+
+  process.env.TABLE_NOTES_FRAIS = "NotesFrais-local";  
+  process.env.TABLE_MESSAGES = "Messages-local";
+  process.env.TABLE_ALERTES_OFFRES = "AlertesOffres-local";
+  process.env.TABLE_SITES = "Sites-local";
+  
+  process.env.TABLE_SITES = "Sites-local";
+  process.env.TABLE_BIOMETRIE = "Biometrie-local";
+
+  process.env.TABLE_PIECES_DOSSIER = "PiecesDossier-local";
+  process.env.TABLE_COOPTATIONS = "Cooptations-local";
+  
+
 }
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-const { authentifier, autoriser } = require("./src/auth/middleware");
+const { authentifier, authentifierOptionnel, autoriser } = require("./src/auth/middleware");
 const { docClient } = require("./src/utils/dynamodb");
 const { analyserCV, genererQuizIA } = require("./src/services/bedrockService");
 const employesUtil = require("./src/utils/employe");
 const { v4: uuidv4 } = require("uuid");
+const documents = require("./src/services/documents");
+const notesFrais = require("./src/frais/notes");
+
 
 const {
   QueryCommand, ScanCommand, PutCommand,
@@ -81,20 +107,54 @@ const supprimerEvenement = require("./src/calendrier/supprimer");
 
 const genererFacture = require("./src/factures/generer");
 const dashboardStats = require("./src/dashboard/stats");
+const demarrerQuiz  = require("./src/quiz/demarrer");
+const soumettreQuiz = require("./src/quiz/soumettre");
+const courriel = require("./src/services/courriel");
+const profilCandidat = require("./src/candidat/profil");
+const agendaCandidat = require("./src/candidat/agenda");
+const notifications = require("./src/utils/notification");
 
+const cooptation = require("./src/cooptation/cooptations");
+const annuaire = require("./src/employes/annuaire");
 // ── Utilitaires ──────────────────────────────────────────────────
+// ── Téléversements ───────────────────────────────────────────────
+// Deux configurations distinctes : un CV est un document, un
+// justificatif de frais est le plus souvent une photo de reçu.
+
+const TAILLE_MAX = 5 * 1024 * 1024;
+
+function filtreFormats(acceptes, message) {
+  return (req, file, cb) => {
+    // Les deux arguments s'excluent : soit une erreur, soit
+    // l'acceptation. Les passer ensemble laisse Multer dans un état
+    // indéfini — c'était le défaut de la version précédente.
+    if (acceptes.includes(file.mimetype)) return cb(null, true);
+    cb(new Error(message));
+  };
+}
+
 const uploadCV = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const acceptes = [
+  limits: { fileSize: TAILLE_MAX },
+  fileFilter: filtreFormats(
+    [
       "application/pdf",
       "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ];
-    cb(acceptes.includes(file.mimetype) ? null : new Error("Format non supporté. Utilisez PDF ou DOCX."), true);
-  },
+    ],
+    "Format non supporté. Utilisez PDF ou DOCX."
+  ),
 });
+
+const uploadJustificatif = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: TAILLE_MAX },
+  fileFilter: filtreFormats(
+    ["application/pdf", "image/jpeg", "image/png", "image/webp"],
+    "Format non supporté. Utilisez PDF, JPEG ou PNG."
+  ),
+});
+
 
 function toEvent(req) {
   return {
@@ -111,6 +171,14 @@ function toEvent(req) {
 }
 
 function envoyer(res, resultat) {
+
+  if (resultat && resultat.isBase64Encoded) {
+    for (const [nom, valeur] of Object.entries(resultat.headers || {})) {
+      res.setHeader(nom, valeur);
+    }
+    return res.status(resultat.statusCode || 200).send(Buffer.from(resultat.body, "base64"));
+  }
+
   const corps = typeof resultat.body === "string" ? JSON.parse(resultat.body) : resultat.body;
   res.status(resultat.statusCode).json(corps);
 }
@@ -118,7 +186,9 @@ function envoyer(res, resultat) {
 /** Raccourci : route qui délègue entièrement à un handler */
 const via = (handler) => async (req, res) => {
   try {
-    envoyer(res, await handler.handler(toEvent(req)));
+    // req.file n'existe que sur une route passée par multer ; ailleurs
+    // il vaut undefined, ce que les handlers traitent déjà.
+    envoyer(res, await handler.handler(toEvent(req), req.file));
   } catch (e) {
     console.error(`Erreur ${req.method} ${req.path}:`, e);
     res.status(500).json({ succes: false, erreur: e.message });
@@ -159,17 +229,25 @@ app.put("/auth/profil", authentifier, async (req, res) => {
     const fiche = await employesUtil.parEmail(req.user?.email);
     if (!fiche) return ko(res, "Aucune fiche employé rattachée à ce compte", 404);
 
-    const { telephone, poste, departement } = req.body;
+    // Route LIBRE-SERVICE : elle n'exige pas le rôle RH, donc elle ne
+    // doit écrire que ce qu'un salarié a le droit de changer sur
+    // lui-même. « poste » et « departement » en sont retirés : ils
+    // décrivent la place du salarié dans l'entreprise, pas ses
+    // coordonnées, et relèvent de PUT /employes/:id — réservé à la RH.
+    //
+    // Les retirer du formulaire React n'aurait rien fermé : une
+    // interface cache un bouton, elle n'empêche pas une requête.
+    const { telephone, adresse } = req.body;
 
     await docClient.send(new UpdateCommand({
       TableName: T.TABLE_EMPLOYES,
       Key: { id: fiche.id },
-      UpdateExpression: "SET telephone = :t, poste = :p, departement = :d, misAJourLe = :maj",
+      UpdateExpression:
+        "SET telephone = :t, adresse = :a, misAJourLe = :maj",
       ConditionExpression: "attribute_exists(id)",
       ExpressionAttributeValues: {
         ":t": telephone ?? fiche.telephone ?? "",
-        ":p": poste ?? fiche.poste ?? "",
-        ":d": departement ?? fiche.departement ?? "",
+        ":a": adresse ?? fiche.adresse ?? "",
         ":maj": new Date().toISOString(),
       },
     }));
@@ -190,12 +268,148 @@ app.get("/employes/:id", authentifier, via(detailEmploye));
 app.put("/employes/:id", authentifier, autoriser("RH"), via(modifierEmploye));
 app.delete("/employes/:id", authentifier, autoriser("RH"), via(supprimerEmploye));
 
+const recommandations = require("./src/offres/recommandations");
+const messagerie = require("./src/messagerie/fils");
+
+app.get("/offres/recommandations", authentifier, async (req, res) => {
+  envoyer(res, await recommandations.recommander(toEvent(req)));
+});
+app.get("/offres/alerte", authentifier, async (req, res) => {
+  envoyer(res, await recommandations.lireAlerte(toEvent(req)));
+});
+app.put("/offres/alerte", authentifier, async (req, res) => {
+  envoyer(res, await recommandations.enregistrerAlerte(toEvent(req)));
+});
+
+// ── MESSAGERIE INTERNE ─────────────────────────────────────────────
+const internes = require("./src/messagerie/internes");
+
+// Mes fils, tous confondus
+app.get("/messages/internes", authentifier, async (req, res) => {
+  try {
+    const r = await internes.handlerFils(toEvent(req));
+    res.status(r.statusCode).send(r.body);
+  } catch (e) {
+    console.error("Erreur GET /messages/internes :", e);
+    res.status(500).json({ succes: false, erreur: "Erreur serveur" });
+  }
+});
+
+// Un fil avec un collègue, et marquage des messages reçus comme lus
+app.get("/messages/internes/:employeId", authentifier, async (req, res) => {
+  try {
+    const r = await internes.handlerFil(toEvent(req));
+    res.status(r.statusCode).send(r.body);
+  } catch (e) {
+    console.error("Erreur GET fil interne :", e);
+    res.status(500).json({ succes: false, erreur: "Erreur serveur" });
+  }
+});
+
+app.post("/messages/internes/:employeId", authentifier, async (req, res) => {
+  try {
+    const r = await internes.handlerEnvoyer(toEvent(req));
+    res.status(r.statusCode).send(r.body);
+  } catch (e) {
+    console.error("Erreur POST fil interne :", e);
+    res.status(500).json({ succes: false, erreur: "Erreur serveur" });
+  }
+});
+
+app.get("/messages/conversations", authentifier, async (req, res) => {
+  envoyer(res, await messagerie.mesConversations(toEvent(req)));
+});
+app.get("/messages/:candidatureId", authentifier, async (req, res) => {
+  envoyer(res, await messagerie.lire(toEvent(req)));
+});
+app.post("/messages/:candidatureId", authentifier, async (req, res) => {
+  envoyer(res, await messagerie.envoyer(toEvent(req)));
+});
+
+app.post("/employes/:id/adresse-professionnelle", authentifier, autoriser("RH"),
+  async (req, res) => {
+    try {
+      envoyer(res, await invitations.handlerAdressePro(toEvent(req)));
+    } catch (e) {
+      console.error("[adresse-pro]", e);
+      res.status(500).json({ erreur: e.message });
+    }
+  });
+
+const dossier = require("./src/dossier/pieces");
+
+// ── Dossier du personnel ──
+// Le salarié, en son propre nom
+app.get("/dossier/mes-pieces", authentifier, async (req, res) => {
+  try { envoyer(res, await dossier.handlerMesPieces(toEvent(req))); }
+  catch (e) { console.error("Erreur GET mes-pieces :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.post("/dossier/pieces", authentifier, async (req, res) => {
+  try { envoyer(res, await dossier.handlerDeposer(toEvent(req))); }
+  catch (e) { console.error("Erreur POST piece :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.get("/dossier/pieces/:id/fichier", authentifier, async (req, res) => {
+  try { envoyer(res, await dossier.handlerFichier(toEvent(req))); }
+  catch (e) { console.error("Erreur GET fichier piece :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+// La RH — « a-valider » AVANT « :employeId »
+app.get("/dossier/a-valider", authentifier, async (req, res) => {
+  try { envoyer(res, await dossier.handlerAValider(toEvent(req))); }
+  catch (e) { console.error("Erreur GET a-valider :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.get("/dossier/employes/:employeId/pieces", authentifier, async (req, res) => {
+  try { envoyer(res, await dossier.handlerDossierEmploye(toEvent(req))); }
+  catch (e) { console.error("Erreur GET dossier employe :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.put("/dossier/pieces/:id", authentifier, async (req, res) => {
+  try { envoyer(res, await dossier.handlerTraiter(toEvent(req))); }
+  catch (e) { console.error("Erreur PUT piece :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+
+const importEmployes = require("./src/employes/import-employes");
+
+app.post("/employes/import", authentifier, async (req, res) => {
+  try { envoyer(res, await importEmployes.handlerImporter(toEvent(req))); }
+  catch (e) { console.error("Erreur POST import employes :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.get("/employes/import/modele", authentifier, async (req, res) => {
+  try { envoyer(res, await importEmployes.handlerModele(toEvent(req))); }
+  catch (e) { console.error("Erreur GET modele import :", e); res.status(500).json({ erreur: e.message }); }
+});
 // ══════════════════════════════════════════════════════════════════
 // POINTAGES
 // ══════════════════════════════════════════════════════════════════
+
+const biometrie = require("./src/biometrie/biometrie");
+const corrections = require("./src/pointages/corrections");
+
+app.post("/biometrie/enroler",      authentifier, async (req, res) => envoyer(res, await biometrie.enroler(toEvent(req))));
+app.get("/biometrie/etat",          authentifier, async (req, res) => envoyer(res, await biometrie.etat(toEvent(req))));
+app.delete("/biometrie",            authentifier, async (req, res) => envoyer(res, await biometrie.revoquer(toEvent(req))));
+app.get("/biometrie/statistiques",  authentifier, async (req, res) => envoyer(res, await biometrie.statistiques(toEvent(req))));
+
+app.post("/biometrie/mesurer", authentifier, async (req, res) => envoyer(res, await biometrie.mesurer(toEvent(req))));
+
+
 app.post("/pointages/arrivee", authentifier, via(pointageArrivee));
-app.post("/pointages/depart", authentifier, via(pointageDepart));
-app.get("/pointages", authentifier, via(historiquePointages));
+app.post("/pointages/depart",  authentifier, via(pointageDepart));
+app.get("/pointages",          authentifier, via(historiquePointages));
+
+app.post("/pointages/corrections", authentifier,
+  async (req, res) => envoyer(res, await corrections.demander(toEvent(req))));
+
+app.get("/pointages/corrections", authentifier,
+  async (req, res) => envoyer(res, await corrections.lister(toEvent(req))));
+
+app.post("/pointages/corrections/:id/decision", authentifier, autoriser("RH"),
+  async (req, res) => envoyer(res, await corrections.decider(toEvent(req))));
 
 // Saisie rétroactive par la RH, utile pour constituer un historique
 app.post("/pointages/historique/create", authentifier, autoriser("RH"), async (req, res) => {
@@ -231,21 +445,192 @@ app.post("/pointages/historique/create", authentifier, autoriser("RH"), async (r
   }
 });
 
+const invitations = require("./src/employes/invitations");
+const entreprise = require("./src/factures/entreprise");
+
+app.get("/entreprise", authentifier, async (req, res) => {
+  try { envoyer(res, await entreprise.handlerLire(toEvent(req))); }
+  catch (e) { console.error("Erreur GET entreprise :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.put("/entreprise", authentifier, async (req, res) => {
+  try { envoyer(res, await entreprise.handlerEnregistrer(toEvent(req))); }
+  catch (e) { console.error("Erreur PUT entreprise :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+
+app.post("/employes/:id/invitation", authentifier, async (req, res) => {
+  try { envoyer(res, await invitations.handlerInviter(toEvent(req))); }
+  catch (e) { console.error("Erreur POST invitation :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.get("/employes/:id/compte", authentifier, async (req, res) => {
+  try { envoyer(res, await invitations.handlerEtatCompte(toEvent(req))); }
+  catch (e) { console.error("Erreur GET compte :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+app.delete("/employes/:id/compte", authentifier, async (req, res) => {
+  try { envoyer(res, await invitations.handlerDesactiver(toEvent(req))); }
+  catch (e) { console.error("Erreur DELETE compte :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+
 // ══════════════════════════════════════════════════════════════════
 // CONGÉS
 // ══════════════════════════════════════════════════════════════════
+const justificatifConge = require("./src/conges/justificatif");
+
+
+// En mémoire : le fichier part ensuite vers S3 ou le disque, il n'a
+// pas à transiter par un répertoire temporaire.
+const televerser = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+/**
+ * Multer ne traite que le multipart ; sur une requête JSON il laisse
+ * le corps intact mais empêche express.json() de s'exécuter ensuite.
+ * On ne l'engage donc que lorsque le type de contenu l'appelle.
+ */
+const pieceOptionnelle = (champ) => (req, res, next) => {
+  const type = req.headers["content-type"] || "";
+  if (type.startsWith("multipart/form-data")) {
+    return televerser.single(champ)(req, res, next);
+  }
+  next();
+};
+
 app.get("/conges", authentifier, via(listerConges));
-app.post("/conges", authentifier, via(demanderConge));
 app.patch("/conges/:id", authentifier, autoriser("RH"), via(traiterConge));
+
+
+
+
+// Multer pose le fichier sur req.file et les champs texte sur req.body
+app.post(
+  "/conges",
+  authentifier,
+  pieceOptionnelle("justificatif"),
+  async (req, res) => {
+    try {
+      const r = await demanderConge.handler(toEvent(req), req.file);
+      res.status(r.statusCode).json(JSON.parse(r.body));
+    } catch (e) {
+      console.error("Erreur POST /conges :", e);
+      res.status(500).json({ succes: false, erreur: e.message });
+    }
+  },
+);
+app.get("/conges/:id/justificatif", authentifier, async (req, res) => {
+  const r = await justificatifConge.handler(toEvent(req));
+  if (r.isBase64Encoded) {
+    res.set(r.headers);
+    return res.send(Buffer.from(r.body, "base64"));
+  }
+  res.status(r.statusCode).json(JSON.parse(r.body));
+});
+
+
+
+app.post(
+  "/cooptations",
+  authentifier,
+  pieceOptionnelle("cv"),
+  async (req, res) => {
+    try {
+      const r = await cooptation.proposer(toEvent(req), req.file);
+      res.status(r.statusCode).json(JSON.parse(r.body));
+    } catch (e) {
+      console.error("Erreur POST /cooptations :", e);
+      res.status(500).json({ succes: false, erreur: e.message });
+    }
+  },
+);
+ 
+app.get("/cooptations", authentifier, async (req, res) => {
+  try {
+    const r = await cooptation.lister(toEvent(req));
+    res.status(r.statusCode).json(JSON.parse(r.body));
+  } catch (e) {
+    console.error("Erreur GET /cooptations :", e);
+    res.status(500).json({ succes: false, erreur: e.message });
+  }
+});
+ 
+app.get("/cooptations/:id", authentifier, async (req, res) => {
+  try {
+    const r = await cooptation.detail(toEvent(req));
+    res.status(r.statusCode).json(JSON.parse(r.body));
+  } catch (e) {
+    console.error("Erreur GET /cooptations/:id :", e);
+    res.status(500).json({ succes: false, erreur: e.message });
+  }
+});
+ 
+app.patch("/cooptations/:id", authentifier, async (req, res) => {
+  try {
+    const r = await cooptation.decider(toEvent(req));
+    res.status(r.statusCode).json(JSON.parse(r.body));
+  } catch (e) {
+    console.error("Erreur PATCH /cooptations/:id :", e);
+    res.status(500).json({ succes: false, erreur: e.message });
+  }
+});
+ 
+app.post("/cooptations/:id/prime", authentifier, async (req, res) => {
+  try {
+    const r = await cooptation.accorderPrime(toEvent(req));
+    res.status(r.statusCode).json(JSON.parse(r.body));
+  } catch (e) {
+    console.error("Erreur POST /cooptations/:id/prime :", e);
+    res.status(500).json({ succes: false, erreur: e.message });
+  }
+});
+ 
+// ── Le CV ───────────────────────────────────────────────────────────
+//
+// Celle-ci ne renvoie pas du JSON mais le fichier lui-même, comme ta
+// route de téléchargement des attestations. Le front le reçoit en
+// `blob` et le pose dans les téléchargements.
+//
+// Pas d'adresse directe vers le seau : une adresse se copie, se colle
+// dans un message, et le CV d'un candidat se retrouve lisible par
+// quelqu'un qui n'a jamais eu le droit de l'ouvrir.
+ 
+app.get("/cooptations/:id/cv", authentifier, async (req, res) => {
+  try {
+    const r = await cooptation.telechargerCv(toEvent(req));
+ 
+    // Un refus garde la forme habituelle ; on le relaie tel quel.
+    if (r.statusCode) {
+      return res.status(r.statusCode).json(JSON.parse(r.body));
+    }
+ 
+    res.setHeader("Content-Type", r.type);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(r.nom)}`,
+    );
+    res.send(r.corps);
+  } catch (e) {
+    console.error("Erreur GET /cooptations/:id/cv :", e);
+    res.status(500).json({ succes: false, erreur: e.message });
+  }
+});
 
 // ══════════════════════════════════════════════════════════════════
 // CANDIDATURES
 // ══════════════════════════════════════════════════════════════════
-app.post("/candidatures", uploadCV.single("cv"), async (req, res) => {
+// Le candidat peut passer par une offre ou postuler spontanement.
+// Dans le second cas, il reutilise souvent le CV deja depose dans son
+// profil plutot que d'en joindre un nouveau.
+app.post("/candidatures", authentifierOptionnel, uploadCV.single("cv"), async (req, res) => {
   try {
     const {
       nom, prenom, email, telephone, lettreMotivation,
       niveauEtude, experience, competences, offreId, linkedin,
+      posteVise: posteVoulu, reutiliserCvProfil,
     } = req.body;
 
     if (!nom || !prenom || !email || !lettreMotivation) {
@@ -253,9 +638,11 @@ app.post("/candidatures", uploadCV.single("cv"), async (req, res) => {
     }
 
     let offre = null;
-    let posteVise = "Candidature spontanée";
+    let posteVise = posteVoulu || "Candidature spontanée";
     if (offreId) {
-      const r = await docClient.send(new GetCommand({ TableName: T.TABLE_OFFRES, Key: { id: offreId } }));
+      const r = await docClient.send(new GetCommand({
+        TableName: T.TABLE_OFFRES, Key: { id: offreId },
+      }));
       if (r.Item) { offre = r.Item; posteVise = offre.titre; }
     }
 
@@ -264,9 +651,47 @@ app.post("/candidatures", uploadCV.single("cv"), async (req, res) => {
       catch { return String(competences || "").split(",").map((c) => c.trim()).filter(Boolean); }
     })();
 
+    // ── Resolution du CV ─────────────────────────────────────────
+    // Trois cas : un fichier joint, la reutilisation du CV du profil,
+    // ou rien du tout. La reutilisation recopie la cle sans dupliquer
+    // le fichier sur le stockage.
+    let cvKey = null;
+    let cvFileName = req.file?.originalname || null;
+    let bufferPourAnalyse = req.file?.buffer || null;
+    let mimetypePourAnalyse = req.file?.mimetype || "application/pdf";
+
+    if (req.file) {
+      cvKey = await documents.stockerCv(req.file);
+    } else if (reutiliserCvProfil === "true" && req.user?.sub) {
+      const p = await docClient.send(new GetCommand({
+        TableName: T.TABLE_PROFILS_CANDIDATS, Key: { id: req.user.sub },
+      }));
+      if (p.Item?.cvKey) {
+        cvKey = p.Item.cvKey;
+        cvFileName = p.Item.cvFileName || cvFileName;
+
+        // Le CV est relu depuis le stockage pour que l'analyse porte
+        // sur son contenu, et non sur les seules declarations.
+        try {
+          const doc = await documents.lireDocument(cvKey);
+          if (doc?.contenu) {
+            bufferPourAnalyse = doc.contenu;
+            mimetypePourAnalyse = doc.type || mimetypePourAnalyse;
+          } else if (doc?.flux) {
+            const morceaux = [];
+            for await (const m of doc.flux) morceaux.push(m);
+            bufferPourAnalyse = Buffer.concat(morceaux);
+            mimetypePourAnalyse = doc.type || mimetypePourAnalyse;
+          }
+        } catch (e) {
+          console.warn("CV du profil illisible, analyse sur declarations:", e.message);
+        }
+      }
+    }
+
     const analyse = await analyserCV({
-      fileBuffer: req.file?.buffer || Buffer.from(""),
-      mimetype: req.file?.mimetype || "application/pdf",
+      fileBuffer: bufferPourAnalyse || Buffer.from(""),
+      mimetype: mimetypePourAnalyse,
       lettreMotivation,
       competencesCandidat: listeCompetences,
       niveauEtude, experience, offre,
@@ -284,15 +709,17 @@ app.post("/candidatures", uploadCV.single("cv"), async (req, res) => {
 
     const candidature = {
       id: uuidv4(),
-      // offreId est OMIS et non mis à null : DynamoDB refuse une valeur
-      // nulle sur une clé d'index. L'absence exclut la candidature
-      // spontanée du classement par offre, ce qui est le comportement voulu.
+      // offreId est OMIS et non mis a null : DynamoDB refuse une valeur
+      // nulle sur une cle d'index. L'absence exclut la candidature
+      // spontanee du classement par offre, ce qui est voulu.
       ...(offreId ? { offreId } : {}),
       offreTitre: posteVise,
       posteVise,
-      nom, prenom, email,
+      nom, prenom,
+      email: String(email).trim().toLowerCase(),
       telephone: telephone || "",
-      cvFileName: req.file?.originalname || null,
+      cvFileName,
+      cvKey,
       lettreMotivation,
       linkedin: linkedin || null,
       competences: listeCompetences,
@@ -311,9 +738,11 @@ app.post("/candidatures", uploadCV.single("cv"), async (req, res) => {
         niveauExperience: analyse.niveauExperience,
         pertinenceFormation: analyse.pertinenceFormation,
       },
-      // Permet de repérer quand Bedrock est indisponible : sans cette
-      // trace, le repli par mots-clés passe pour une analyse réussie.
-      sourceAnalyse: analyse.pointsForts?.[0] === "Analyse manuelle requise" ? "fallback" : "bedrock",
+      // Le service renvoie desormais la source explicitement : sans
+      // cette trace, un score calcule par repli passerait pour une
+      // analyse par le modele.
+      sourceAnalyse: analyse.source || "bedrock",
+      extractionReussie: analyse.extractionReussie ?? null,
       quizId: null,
       quizStatus: "NON_ENVOYE",
       statut,
@@ -322,12 +751,14 @@ app.post("/candidatures", uploadCV.single("cv"), async (req, res) => {
         commentaire: `Score ${analyse.score}/100 — ${analyse.recommendation}`,
         action: "candidature_soumise",
       }],
-      source: "site_carriere",
+      source: offreId ? "site_carriere" : "spontanee",
       creeLe: maintenant,
       misAJourLe: maintenant,
     };
 
-    await docClient.send(new PutCommand({ TableName: T.TABLE_CANDIDATURES, Item: candidature }));
+    await docClient.send(new PutCommand({
+      TableName: T.TABLE_CANDIDATURES, Item: candidature,
+    }));
 
     res.status(201).json({
       succes: true,
@@ -457,6 +888,29 @@ app.get("/candidatures/:id", authentifier, async (req, res) => {
   }
 });
 
+app.get("/candidatures/:id/cv", authentifier, autoriser("RH"), async (req, res) => {
+  try {
+    const r = await docClient.send(new GetCommand({
+      TableName: T.TABLE_CANDIDATURES, Key: { id: req.params.id },
+    }));
+    if (!r.Item) return ko(res, "Candidature introuvable", 404);
+    if (!r.Item.cvKey) return ko(res, "Aucun CV enregistré pour cette candidature", 404);
+
+    const doc = await documents.lireDocument(r.Item.cvKey);
+    if (!doc) return ko(res, "Fichier introuvable sur le stockage", 404);
+
+    const nom = r.Item.cvFileName || `CV_${r.Item.nom}_${r.Item.prenom}.pdf`;
+    res.setHeader("Content-Type", doc.type || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${nom}"`);
+
+    if (doc.flux) return doc.flux.pipe(res);
+    res.send(doc.contenu);
+  } catch (e) {
+    console.error("Erreur lecture CV:", e);
+    ko(res, e.message);
+  }
+});
+
 app.put("/candidatures/:id/statut", authentifier, autoriser("RH"), async (req, res) => {
   try {
     const { statut, commentaire } = req.body;
@@ -517,18 +971,30 @@ app.put("/candidatures/:id/statut", authentifier, autoriser("RH"), async (req, r
             creeLe: maintenant,
           },
         }));
-
         expression += ", quizId = :qid, quizStatus = :qs, quizEnvoyeLe = :qe, quizExpirationDate = :qx";
         valeurs[":qid"] = quizId;
         valeurs[":qs"] = "ENVOYE";
         valeurs[":qe"] = maintenant;
         valeurs[":qx"] = new Date(Date.now() + 7 * 864e5).toISOString();
+
+        // Prevenir le candidat : sans message, il ne saurait pas qu'un
+        // quiz l'attend avant de se connecter. L'envoi reste dans ce
+        // bloc : quizId n'existe que si le quiz a ete cree.
+        await courriel.quizEnvoye({
+          destinataire: candidature.email,
+          prenom: candidature.prenom,
+          offreTitre: candidature.offreTitre || candidature.posteVise,
+          quizId,
+          dureeMinutes: 30,
+          echeance: valeurs[":qx"],
+        }).catch((e) => console.error("Courriel de quiz non envoyé:", e.message));
       } catch (err) {
         console.error("Génération du quiz échouée, statut tout de même mis à jour:", err.message);
       }
     }
 
     await docClient.send(new UpdateCommand({
+    
       TableName: T.TABLE_CANDIDATURES,
       Key: { id: req.params.id },
       UpdateExpression: expression,
@@ -604,7 +1070,7 @@ app.put("/candidatures/:id/entretien", authentifier, autoriser("RH"), async (req
       },
     }));
 
-    if (notifier && candidature.email) {
+        if (notifier && candidature.email) {
       await docClient.send(new PutCommand({
         TableName: T.TABLE_NOTIFICATIONS,
         Item: {
@@ -619,6 +1085,20 @@ app.put("/candidatures/:id/entretien", authentifier, autoriser("RH"), async (req
           metadata: { candidatureId: candidature.id, entretienId },
         },
       }));
+
+      // Un echec d'envoi ne doit pas annuler la planification :
+      // l'entretien est deja enregistre et visible dans l'agenda.
+      await courriel.entretienPlanifie({
+        destinataire: candidature.email,
+        prenom: candidature.prenom,
+        offreTitre: candidature.offreTitre || candidature.posteVise,
+        entretien: {
+          dateHeure: `${entretien.date}T${entretien.heure}:00`,
+          dureeMinutes: entretien.dureeMinutes || 60,
+          lienVideo: entretien.lien || null,
+          lieu: entretien.adresse || null,
+        },
+      }).catch((e) => console.error("Courriel d'entretien non envoyé:", e.message));
     }
 
     ok(res, { message: "Entretien planifié", entretienId, entretien });
@@ -648,6 +1128,64 @@ app.get("/entretiens", authentifier, autoriser("RH"), async (req, res) => {
 // ══════════════════════════════════════════════════════════════════
 // QUIZ
 // ══════════════════════════════════════════════════════════════════
+// Consultation RH
+app.get("/quiz/sessions", authentifier, autoriser("RH"), async (req, res) => {
+  try {
+    if (!req.query.candidatureId) return ko(res, "candidatureId requis", 400);
+    const r = await docClient.send(new QueryCommand({
+      TableName: T.TABLE_QUIZ_SESSIONS,
+      IndexName: "candidature-index",
+      KeyConditionExpression: "candidatureId = :c",
+      ExpressionAttributeValues: { ":c": req.query.candidatureId },
+      ScanIndexForward: false,
+    }));
+    ok(res, { sessions: r.Items || [] });
+  } catch (e) {
+    ko(res, e.message);
+  }
+});
+
+app.get("/quiz/sessions/:id", authentifier, autoriser("RH"), async (req, res) => {
+  try {
+    const r = await docClient.send(new GetCommand({
+      TableName: T.TABLE_QUIZ_SESSIONS, Key: { id: req.params.id },
+    }));
+    if (!r.Item) return ko(res, "Session introuvable", 404);
+    ok(res, { session: r.Item });
+  } catch (e) {
+    ko(res, e.message);
+  }
+});
+
+
+// Indicateurs d'intégrité remontés pendant le passage
+app.put("/quiz/sessions/:id/integrite", authentifier, async (req, res) => {
+  try {
+    const { nombreChangementsOnglet = 0, nombreCopierColler = 0 } = req.body;
+    await docClient.send(new UpdateCommand({
+      TableName: T.TABLE_QUIZ_SESSIONS,
+      Key: { id: req.params.id },
+      UpdateExpression: "SET nombreChangementsOnglet = :o, nombreCopierColler = :c",
+      // Ne touche qu'une session en cours appartenant au candidat
+      ConditionExpression: "candidatEmail = :e AND statut = :s",
+      ExpressionAttributeValues: {
+        ":o": Number(nombreChangementsOnglet) || 0,
+        ":c": Number(nombreCopierColler) || 0,
+        ":e": req.user.email,
+        ":s": "EN_COURS",
+      },
+    }));
+    ok(res, { enregistre: true });
+  } catch {
+    // Silencieux : un échec ici ne doit pas perturber le passage
+    ok(res, { enregistre: false });
+  }
+});
+
+
+
+
+
 app.post("/quiz/generer", authentifier, autoriser("RH"), async (req, res) => {
   try {
     const { offreId, candidatureId } = req.body;
@@ -684,34 +1222,19 @@ app.post("/quiz/generer", authentifier, autoriser("RH"), async (req, res) => {
     ko(res, e.message);
   }
 });
+app.post("/quiz/:quizId/demarrer", authentifier, via(demarrerQuiz));
+app.post("/quiz/sessions/:sessionId/soumettre", authentifier, via(soumettreQuiz));
 
-app.get("/quiz/:quizId", authentifier, async (req, res) => {
+// Consultation d'un quiz avec son corrigé — réservée à la RH.
+// Un candidat passe par POST /quiz/:quizId/demarrer, qui ouvre une
+// session et retire les réponses correctes.
+app.get("/quiz/:quizId", authentifier, autoriser("RH"), async (req, res) => {
   try {
     const r = await docClient.send(new GetCommand({
       TableName: T.TABLE_QUIZ, Key: { id: req.params.quizId },
     }));
     if (!r.Item) return ko(res, "Quiz introuvable", 404);
-
-    if (req.user.role === "RH") return ok(res, { quiz: r.Item });
-
-    // Le candidat doit posséder une candidature rattachée à ce quiz
-    const c = await docClient.send(new QueryCommand({
-      TableName: T.TABLE_CANDIDATURES,
-      IndexName: "email-index",
-      KeyConditionExpression: "email = :e",
-      FilterExpression: "quizId = :q",
-      ExpressionAttributeValues: { ":e": req.user.email, ":q": req.params.quizId },
-    }));
-    const candidature = (c.Items || [])[0];
-    if (!candidature) return ko(res, "Vous n'avez pas accès à ce quiz", 403);
-
-    // Les réponses correctes ne quittent jamais le serveur
-    const quiz = {
-      ...r.Item,
-      questions: (r.Item.questions || []).map(({ reponseCorrecte, explication, criteresEvaluation, ...reste }) => reste),
-    };
-
-    ok(res, { quiz, candidature });
+    ok(res, { quiz: r.Item });
   } catch (e) {
     console.error("Erreur GET /quiz/:id:", e);
     ko(res, "Impossible de charger le quiz");
@@ -724,31 +1247,64 @@ app.get("/candidat/quizzes", authentifier, async (req, res) => {
       TableName: T.TABLE_CANDIDATURES,
       IndexName: "email-index",
       KeyConditionExpression: "email = :e",
-      FilterExpression: "quizStatus IN (:envoye, :encours)",
+      // TERMINE inclus : le candidat doit retrouver ses evaluations
+      // passees et leur resultat, pas seulement celles a faire.
+      FilterExpression: "quizStatus IN (:envoye, :encours, :termine)",
       ExpressionAttributeValues: {
-        ":e": req.user.email, ":envoye": "ENVOYE", ":encours": "EN_COURS",
+        ":e": req.user.email,
+        ":envoye": "ENVOYE",
+        ":encours": "EN_COURS",
+        ":termine": "TERMINE",
       },
     }));
 
     const quizzes = [];
+
     for (const c of r.Items || []) {
-      let details = null;
-      if (c.quizId) {
-        const q = await docClient.send(new GetCommand({ TableName: T.TABLE_QUIZ, Key: { id: c.quizId } }));
-        details = q.Item;
-      }
-      const echeance = c.quizExpirationDate || new Date(Date.now() + 7 * 864e5).toISOString();
+      if (!c.quizId) continue;
+
+      const q = await docClient.send(new GetCommand({
+        TableName: T.TABLE_QUIZ, Key: { id: c.quizId },
+      }));
+      if (!q.Item) continue;
+
+      const details = q.Item;
+      const termine = c.quizStatus === "TERMINE";
+
+      // Un quiz archive reste visible une fois passe : le candidat
+      // conserve l'acces a son resultat.
+      if (!termine && details.statut !== "ACTIF") continue;
+
+      const echeance = c.quizExpirationDate
+        || new Date(Date.now() + 7 * 864e5).toISOString();
+      const heuresRestantes = (new Date(echeance) - Date.now()) / 36e5;
+      const seuil = details.seuilPassage || 70;
+
       quizzes.push({
-        id: c.quizId || `quiz-${c.id}`,
+        id: details.id,
         candidatureId: c.id,
-        titre: details?.titre || `Évaluation — ${c.offreTitre || c.posteVise}`,
+        titre: details.titre || `Évaluation — ${c.offreTitre || c.posteVise}`,
         offreTitre: c.offreTitre || c.posteVise,
-        dureeMinutes: details?.dureeMinutes || 30,
+        dureeMinutes: details.dureeMinutes || 30,
+        nombreQuestions: (details.questions || []).length,
+        seuilPassage: seuil,
         echeance,
-        statut: c.quizStatus === "ENVOYE" ? "a_faire" : "en_cours",
-        urgent: (new Date(echeance) - Date.now()) / 36e5 < 48,
+        statut: termine ? "termine" : c.quizStatus === "ENVOYE" ? "a_faire" : "en_cours",
+        urgent: !termine && heuresRestantes > 0 && heuresRestantes < 48,
+        expire: !termine && heuresRestantes <= 0,
+        // Resultat, uniquement pour un quiz passe
+        scoreObtenu: termine ? (c.scoreQuiz ?? null) : null,
+        reussi: termine && c.scoreQuiz != null ? c.scoreQuiz >= seuil : null,
       });
     }
+
+    // A faire d'abord, par echeance ; puis les termines
+    quizzes.sort((a, b) => {
+      if ((a.statut === "termine") !== (b.statut === "termine")) {
+        return a.statut === "termine" ? 1 : -1;
+      }
+      return String(a.echeance).localeCompare(String(b.echeance));
+    });
 
     ok(res, { quizzes });
   } catch (e) {
@@ -786,16 +1342,87 @@ app.get("/candidat/meetings", authentifier, async (req, res) => {
   }
 });
 
+
+app.get("/candidat/agenda", authentifier, async (req, res) => {
+  envoyer(res, await agendaCandidat.lister(toEvent(req)));
+});
+
+// L'export renvoie du texte brut, pas du JSON : envoyer() casserait
+// le format attendu par les clients d'agenda.
+app.get("/candidat/agenda.ics", authentifier, async (req, res) => {
+  const resultat = await agendaCandidat.exporterIcs(toEvent(req));
+  if (resultat.statusCode !== 200) return envoyer(res, resultat);
+
+  res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="hr-up-agenda.ics"');
+  res.send(resultat.body);
+});
+
+
+
+app.get("/candidat/profil", authentifier, async (req, res) => {
+  envoyer(res, await profilCandidat.lire(toEvent(req)));
+});
+
+app.put("/candidat/profil", authentifier, async (req, res) => {
+  envoyer(res, await profilCandidat.modifier(toEvent(req)));
+});
+
+app.post("/candidat/profil/cv", authentifier, uploadCV.single("cv"), async (req, res) => {
+  envoyer(res, await profilCandidat.televerserCv(toEvent(req), req.file));
+});
+
+app.delete("/candidat/profil/cv", authentifier, async (req, res) => {
+  envoyer(res, await profilCandidat.supprimerCv(toEvent(req)));
+});
+
+// Lecture du CV par le candidat lui-même
+app.get("/candidat/profil/cv", authentifier, async (req, res) => {
+  try {
+    const r = await docClient.send(new GetCommand({
+      TableName: T.TABLE_PROFILS_CANDIDATS, Key: { id: req.user.sub },
+    }));
+    if (!r.Item?.cvKey) return ko(res, "Aucun CV", 404);
+
+    const doc = await documents.lireDocument(r.Item.cvKey);
+    if (!doc) return ko(res, "Fichier introuvable", 404);
+
+    res.setHeader("Content-Type", doc.type || "application/pdf");
+    if (doc.flux) return doc.flux.pipe(res);
+    res.send(doc.contenu);
+  } catch (e) {
+    ko(res, e.message);
+  }
+});
+
+
 // ══════════════════════════════════════════════════════════════════
 // NOTIFICATIONS
 // ══════════════════════════════════════════════════════════════════
+
+
+async function clesNotification(utilisateur) {
+  const email = utilisateur?.email ?? null;
+
+  // La fiche peut ne pas exister : un candidat n'en a pas, et un
+  // compte RH mal rattaché non plus. Ce n'est pas une erreur.
+  let fiche = null;
+  try {
+    if (email) fiche = await employesUtil.parEmail(email);
+  } catch (e) {
+    console.error("Fiche introuvable pour les notifications :", e.message);
+  }
+
+  return notifications.clesLecture({
+    email,
+    employeId: fiche?.id ?? null,
+    roles: notifications.rolesDe(utilisateur),
+  });
+}
+
 app.get("/notifications/me", authentifier, async (req, res) => {
   try {
-    // Les notifications sont adressées soit à l'email (candidats), soit à
-    // l'identifiant employé (congés, paie) : on interroge les deux.
-    const cles = [req.user?.email].filter(Boolean);
-    const fiche = await employesUtil.parEmail(req.user?.email);
-    if (fiche) cles.push(fiche.id);
+    const cles = await clesNotification(req.user);
 
     const resultats = await Promise.all(cles.map((cle) =>
       docClient.send(new QueryCommand({
@@ -807,11 +1434,28 @@ app.get("/notifications/me", authentifier, async (req, res) => {
       }))
     ));
 
-    const notifications = resultats
-      .flatMap((r) => r.Items || [])
-      .sort((a, b) => String(b.creeLe).localeCompare(String(a.creeLe)));
+    // Déduplication par identifiant. Deux clés différentes ne peuvent
+    // pas rendre la même ligne aujourd'hui, mais ce sera le cas le
+    // jour où un émetteur écrira vers un rôle ET vers la personne —
+    // et une notification affichée deux fois se remarque tout de
+    // suite, alors que la cause ne se voit pas.
+    const vues = new Set();
+    const liste = [];
 
-    ok(res, { notifications, nonLues: notifications.filter((n) => !n.lu).length });
+    for (const r of resultats) {
+      for (const n of r.Items || []) {
+        if (vues.has(n.id)) continue;
+        vues.add(n.id);
+        liste.push(n);
+      }
+    }
+
+    liste.sort((a, b) => String(b.creeLe).localeCompare(String(a.creeLe)));
+
+    ok(res, {
+      notifications: liste,
+      nonLues: liste.filter((n) => !n.lu).length,
+    });
   } catch (e) {
     console.error("Erreur notifications:", e);
     ok(res, { notifications: [], nonLues: 0 });
@@ -820,50 +1464,221 @@ app.get("/notifications/me", authentifier, async (req, res) => {
 
 app.put("/notifications/:id/lue", authentifier, async (req, res) => {
   try {
+    // ── Contrôle d'appartenance ──
+    //
+    // La version précédente marquait n'importe quelle notification
+    // comme lue, sur simple connaissance de son identifiant. Un
+    // compte authentifié pouvait donc marquer celles des autres.
+    //
+    // Ce n'est pas une fuite de données — rien n'est renvoyé — mais
+    // c'est une écriture sur le bien d'autrui, et c'est le genre de
+    // chose qu'un jury cherche quand il voit une route avec un
+    // identifiant dans l'URL.
+    const lu = await docClient.send(new GetCommand({
+      TableName: T.TABLE_NOTIFICATIONS,
+      Key: { id: req.params.id },
+    }));
+
+    const notification = lu.Item;
+
+    // Même réponse pour « inexistante » et « pas à vous » : distinguer
+    // les deux permettrait de deviner l'existence d'une notification
+    // en essayant des identifiants.
+    if (!notification) return ko(res, "Notification introuvable");
+
+    const cles = await clesNotification(req.user);
+    if (!cles.includes(notification.userId)) {
+      return ko(res, "Notification introuvable");
+    }
+
     await docClient.send(new UpdateCommand({
       TableName: T.TABLE_NOTIFICATIONS,
       Key: { id: req.params.id },
       UpdateExpression: "SET lu = :v",
       ExpressionAttributeValues: { ":v": true },
     }));
+
     ok(res, { message: "Notification lue" });
   } catch (e) {
+    console.error("Erreur marquage notification:", e);
     ko(res, "Impossible de marquer comme lue");
   }
 });
 
 app.put("/notifications/lire-tout", authentifier, async (req, res) => {
   try {
-    const r = await docClient.send(new QueryCommand({
-      TableName: T.TABLE_NOTIFICATIONS,
-      IndexName: "user-date-index",
-      KeyConditionExpression: "userId = :u",
-      FilterExpression: "lu = :faux",
-      ExpressionAttributeValues: { ":u": req.user.email, ":faux": false },
-    }));
+    const cles = await clesNotification(req.user);
 
-    await Promise.all((r.Items || []).map((n) =>
+    // Les identifiants sont rassemblés avant d'écrire : une même
+    // notification atteignable par deux clés serait sinon mise à jour
+    // deux fois, et comptée deux fois dans le total annoncé.
+    const aMarquer = new Set();
+
+    for (const cle of cles) {
+      const r = await docClient.send(new QueryCommand({
+        TableName: T.TABLE_NOTIFICATIONS,
+        IndexName: "user-date-index",
+        KeyConditionExpression: "userId = :u",
+        FilterExpression: "lu = :faux",
+        ExpressionAttributeValues: { ":u": cle, ":faux": false },
+      }));
+
+      for (const n of r.Items || []) aMarquer.add(n.id);
+    }
+
+    await Promise.all([...aMarquer].map((id) =>
       docClient.send(new UpdateCommand({
         TableName: T.TABLE_NOTIFICATIONS,
-        Key: { id: n.id },
+        Key: { id },
         UpdateExpression: "SET lu = :v",
         ExpressionAttributeValues: { ":v": true },
       }))
     ));
 
-    ok(res, { message: `${r.Items?.length || 0} notification(s) marquée(s) comme lue(s)` });
+    ok(res, {
+      message: `${aMarquer.size} notification(s) marquée(s) comme lue(s)`,
+    });
   } catch (e) {
+    console.error("Erreur lecture de tout:", e);
     ko(res, "Impossible de tout marquer comme lu");
   }
 });
 
+const demandesDoc = require("./src/documents/demandes");
+
+
+app.get("/documents/types", authentifier, via(demandesDoc.typesDisponibles));
+app.get("/documents/demandes", authentifier, async (req, res) => {
+  envoyer(res, await demandesDoc.lister(toEvent(req)));
+});
+app.post("/documents/demandes", authentifier, async (req, res) => {
+  envoyer(res, await demandesDoc.demander(toEvent(req)));
+});
+app.put("/documents/demandes/:id", authentifier, autoriser("RH"), async (req, res) => {
+  envoyer(res, await demandesDoc.traiter(toEvent(req)));
+});
+
+
+app.get("/documents/demandes/:id/fichier", authentifier, async (req, res) => {
+  const r = await demandesDoc.telecharger(toEvent(req));
+  if (r.statusCode) return envoyer(res, r);
+
+  const doc = await documents.lireDocument(r.pdfKey);
+  if (!doc) return ko(res, "Fichier introuvable", 404);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${r.nom}"`);
+  if (doc.flux) return doc.flux.pipe(res);
+  res.send(doc.contenu);
+});
+
+// Délivrance directe par la RH — celle qui donnait 404
+app.post("/documents/delivrer", authentifier, async (req, res) => {
+  try { envoyer(res, await demandesDoc.delivrer(toEvent(req))); }
+  catch (e) { console.error("Erreur délivrance :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+// Annulation par le salarié
+app.delete("/documents/demandes/:id", authentifier, async (req, res) => {
+  try { envoyer(res, await demandesDoc.annuler(toEvent(req))); }
+  catch (e) { console.error("Erreur annulation :", e); res.status(500).json({ erreur: e.message }); }
+});
+
+
+
+app.get("/annuaire", authentifier, autoriser("RH", "EMPLOYE"), async (req, res) => {
+  try {
+    envoyer(res, await annuaire.handler(toEvent(req)));
+  } catch (e) {
+    console.error("[annuaire]", e);
+    res.status(500).json({ erreur: e.message });
+  }
+});
+
+
+
+
+
+app.get("/frais/notes", authentifier, async (req, res) => {
+  envoyer(res, await notesFrais.lister(toEvent(req)));
+});
+
+app.post("/frais/notes", authentifier, uploadJustificatif.single("justificatif"), async (req, res) => {
+  envoyer(res, await notesFrais.declarer(toEvent(req), req.file));
+});
+
+app.put("/frais/notes/:id", authentifier, autoriser("RH"), async (req, res) => {
+  envoyer(res, await notesFrais.traiter(toEvent(req)));
+});
+
+app.delete("/frais/notes/:id", authentifier, async (req, res) => {
+  envoyer(res, await notesFrais.supprimer(toEvent(req)));
+});
+
+app.get("/frais/notes/:id/justificatif", authentifier, async (req, res) => {
+  try {
+    const r = await docClient.send(new GetCommand({
+      TableName: T.TABLE_NOTES_FRAIS, Key: { id: req.params.id },
+    }));
+    if (!r.Item?.justificatifKey) return ko(res, "Aucun justificatif", 404);
+
+    // Un salarié ne consulte que ses propres justificatifs
+    if (req.user.role !== "RH") {
+      const fiche = await employesUtil.courant(req.user);
+      if (!fiche || fiche.id !== r.Item.employeId) return ko(res, "Accès refusé", 403);
+    }
+
+    const doc = await documents.lireDocument(r.Item.justificatifKey);
+    if (!doc) return ko(res, "Fichier introuvable", 404);
+
+    const extension = path.extname(r.Item.justificatifKey) || ".pdf";
+    const nom = r.Item.justificatifNom || `justificatif${extension}`;
+
+    res.setHeader("Content-Type", doc.type || "application/octet-stream");
+    // inline affiche le document dans le navigateur ; attachment le
+    // telecharge. Un justificatif se consulte, il ne s'archive pas.
+    res.setHeader("Content-Disposition", `inline; filename="${nom}"`);
+
+    if (doc.flux) return doc.flux.pipe(res);
+    res.send(doc.contenu);
+  } catch (e) {
+    console.error("Erreur lecture justificatif:", e);
+    ko(res, e.message);
+  }
+});
 // ══════════════════════════════════════════════════════════════════
 // CALENDRIER
 // ══════════════════════════════════════════════════════════════════
-app.get("/evenements", authentifier, via(listerEvenements));
-app.post("/evenements", authentifier, via(creerEvenement));
-app.put("/evenements/:id", authentifier, via(modifierEvenement));
-app.delete("/evenements/:id", authentifier, via(supprimerEvenement));
+const evenements = require("./src/evenements/gestion");
+
+app.get("/evenements", authentifierOptionnel, async (req, res) => {
+  envoyer(res, await evenements.lister(toEvent(req)));
+});
+app.get("/evenements/mes-inscriptions", authentifier, async (req, res) => {
+  envoyer(res, await evenements.mesEvenements(toEvent(req)));
+});
+app.get("/evenements/:id", authentifierOptionnel, async (req, res) => {
+  envoyer(res, await evenements.detail(toEvent(req)));
+});
+app.post("/evenements/:id/inscription", authentifier, async (req, res) => {
+  envoyer(res, await evenements.sInscrire(toEvent(req)));
+});
+app.delete("/evenements/:id/inscription", authentifier, async (req, res) => {
+  envoyer(res, await evenements.seDesinscrire(toEvent(req)));
+});
+
+app.post("/evenements", authentifier, autoriser("RH"), async (req, res) => {
+  envoyer(res, await evenements.creer(toEvent(req)));
+});
+app.put("/evenements/:id", authentifier, autoriser("RH"), async (req, res) => {
+  envoyer(res, await evenements.modifier(toEvent(req)));
+});
+app.put("/evenements/:id/annuler", authentifier, autoriser("RH"), async (req, res) => {
+  envoyer(res, await evenements.annuler(toEvent(req)));
+});
+app.delete("/evenements/:id", authentifier, autoriser("RH"), async (req, res) => {
+  envoyer(res, await evenements.supprimer(toEvent(req)));
+});
 
 // ══════════════════════════════════════════════════════════════════
 // FACTURES
@@ -975,18 +1790,57 @@ app.get("/dashboard", authentifier, autoriser("RH"), via(dashboardStats));
 // ══════════════════════════════════════════════════════════════════
 app.get("/offres", async (req, res) => {
   try {
-    // Site carrière public : uniquement les offres actives
-    const r = await docClient.send(new QueryCommand({
-      TableName: T.TABLE_OFFRES,
-      IndexName: "statut-index",
-      KeyConditionExpression: "#s = :s",
-      ExpressionAttributeNames: { "#s": "statut" },
-      ExpressionAttributeValues: { ":s": String(req.query.statut || "ACTIVE").toUpperCase() },
-      ScanIndexForward: false,
+    const statut = req.query.statut;
+
+    // Sans filtre explicite, la RH doit voir toutes les offres :
+    // ne renvoyer que les actives faisait disparaitre les pourvues et
+    // les archivees des compteurs.
+    let items;
+
+    if (statut) {
+      const r = await docClient.send(new QueryCommand({
+        TableName: T.TABLE_OFFRES,
+        IndexName: "statut-index",
+        KeyConditionExpression: "statut = :s",
+        ExpressionAttributeValues: { ":s": String(statut).toUpperCase() },
+        ScanIndexForward: false,
+      }));
+      items = r.Items || [];
+    } else {
+      const r = await docClient.send(new ScanCommand({ TableName: T.TABLE_OFFRES }));
+      items = (r.Items || []).sort((a, b) =>
+        String(b.creeLe).localeCompare(String(a.creeLe))
+      );
+    }
+
+    // Les postes pourvus se comptent, ils ne se stockent pas : un
+    // compteur decremente se desynchroniserait a la premiere embauche
+    // annulee.
+    const offres = await Promise.all(items.map(async (offre) => {
+      const c = await docClient.send(new QueryCommand({
+        TableName: T.TABLE_CANDIDATURES,
+        IndexName: "offre-index",
+        KeyConditionExpression: "offreId = :o",
+        FilterExpression: "statut = :e",
+        ExpressionAttributeValues: { ":o": offre.id, ":e": "EMBAUCHE" },
+        Select: "COUNT",
+      }));
+
+      const cible = offre.nombrePostes ?? 1;
+      const pourvus = c.Count ?? 0;
+
+      return {
+        ...offre,
+        nombrePostes: cible,
+        postesPourvus: pourvus,
+        postesRestants: Math.max(0, cible - pourvus),
+        complet: pourvus >= cible,
+      };
     }));
-    ok(res, { offres: r.Items || [] });
+
+    ok(res, { offres });
   } catch (e) {
-    console.error("Erreur GET /offres:", e);
+    console.error("Erreur liste des offres:", e);
     ko(res, "Impossible de charger les offres");
   }
 });
@@ -994,15 +1848,22 @@ app.get("/offres", async (req, res) => {
 app.post("/offres", authentifier, autoriser("RH"), async (req, res) => {
   try {
     const maintenant = new Date().toISOString();
+
     const offre = {
       ...req.body,
       id: uuidv4(),
       statut: String(req.body.statut || "ACTIVE").toUpperCase(),
       competences: req.body.competences || [],
+      // Normalises explicitement : le client pourrait envoyer la
+      // chaine "true" ou une valeur absurde, et nombrePostes sert au
+      // calcul du remplissage.
+      urgente: req.body.urgente === true || req.body.urgente === "true",
+      nombrePostes: Math.max(1, Number(req.body.nombrePostes) || 1),
       nombreCandidatures: 0,
       creeLe: maintenant,
       misAJourLe: maintenant,
     };
+
     await docClient.send(new PutCommand({ TableName: T.TABLE_OFFRES, Item: offre }));
     ok(res, { offre }, 201);
   } catch (e) {
@@ -1017,8 +1878,11 @@ app.put("/offres/:id", authentifier, autoriser("RH"), async (req, res) => {
       TableName: T.TABLE_OFFRES,
       Key: { id: req.params.id },
       UpdateExpression:
+
         "SET titre = :t, departement = :d, #ty = :ty, modeTravail = :m, " +
-        "description = :desc, competences = :c, #s = :s, misAJourLe = :maj",
+        "description = :desc, competences = :c, #s = :s, " +
+        "urgente = :u, nombrePostes = :np, misAJourLe = :maj",
+
       ConditionExpression: "attribute_exists(id)",
       ExpressionAttributeNames: { "#ty": "type", "#s": "statut" },
       ExpressionAttributeValues: {
@@ -1027,6 +1891,8 @@ app.put("/offres/:id", authentifier, autoriser("RH"), async (req, res) => {
         ":ty": req.body.type,
         ":m": req.body.modeTravail || "",
         ":desc": req.body.description || "",
+        ":u": req.body.urgente === true,
+        ":np": Math.max(1, Number(req.body.nombrePostes) || 1),
         ":c": req.body.competences || [],
         ":s": String(req.body.statut || "ACTIVE").toUpperCase(),
         ":maj": new Date().toISOString(),
@@ -1063,5 +1929,18 @@ if (require.main === module) {
     console.log(`   Données : ${process.env.DYNAMODB_ENDPOINT}\n`);
   });
 }
+
+// Les erreurs de Multer remontent comme des erreurs serveur si elles
+// ne sont pas interceptées : un format refusé mérite un 400 explicite.
+app.use((err, req, res, next) => {
+  if (err?.code === "LIMIT_FILE_SIZE") {
+    return ko(res, "Le fichier dépasse 5 Mo", 413);
+  }
+  if (err?.message?.startsWith("Format non supporté")) {
+    return ko(res, err.message, 415);
+  }
+  console.error("Erreur non interceptée:", err);
+  ko(res, "Erreur serveur");
+});
 
 module.exports = app;

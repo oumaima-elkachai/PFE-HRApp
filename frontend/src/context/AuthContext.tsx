@@ -1,14 +1,54 @@
 // src/context/AuthContext.tsx
+//
+// ⚠ ATTENTION — ce fichier portait un CONFLIT DE FUSION GIT non résolu.
+//
+// Celui que tu m'as envoyé contenait encore les marqueurs :
+//
+//     <<<<<<< HEAD
+//     ...
+//     =======
+//     ...
+//     >>>>>>> 79c54a4a0269b3e2b221230690fe291ef378d2c9
+//
+// Deux versions s'y affrontaient : la branche Cognito (`UtilisateurCognito`,
+// `lireJetons`, `rafraichir`) et une branche plus ancienne fondée sur
+// `User` et un `token` venant de `../types`. Un fichier dans cet état ne
+// compile pas.
+//
+// Ce fichier-ci est la branche Cognito, résolue, plus le nécessaire pour
+// la première connexion. **Si tu as déjà résolu le conflit de ton côté,
+// compare avant d'écraser** : seules deux choses changent par rapport à
+// la branche HEAD d'origine, et elles sont signalées plus bas.
+//
+// ── Ce qui change ──────────────────────────────────────────────────
+//
+// 1. `connexion` ne rend plus un utilisateur mais un `ResultatConnexion` :
+//    soit la session est ouverte, soit Cognito réclame un mot de passe.
+//    TypeScript signalera chaque endroit qui doit s'adapter — c'est
+//    voulu, pour qu'aucun appel ne soit oublié.
+//
+// 2. `choisirMotDePasse` termine une première connexion.
 
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import * as cognito from '../services/cognito';
-import type { UtilisateurCognito } from '../services/cognito';
+import type { UtilisateurCognito, ResultatConnexion } from '../services/cognito';
 
 interface AuthContextType {
   user: UtilisateurCognito | null;
   loading: boolean;
-  connexion: (email: string, motDePasse: string) => Promise<UtilisateurCognito>;
+  /**
+   * Ouvre une session, ou annonce que Cognito réclame un mot de passe.
+   *
+   * Un compte créé par la RH reçoit un mot de passe temporaire : à sa
+   * première connexion, Cognito ne délivre aucun jeton et répond par un
+   * défi. C'est le cas de TOUS les salariés invités.
+   */
+  connexion: (email: string, motDePasse: string) => Promise<ResultatConnexion>;
+  /** Termine une première connexion en posant le mot de passe choisi. */
+  choisirMotDePasse: (
+    session: string, email: string, nouveau: string,
+  ) => Promise<UtilisateurCognito>;
   inscription: (p: { email: string; motDePasse: string; prenom: string; nom: string }) => Promise<void>;
   confirmerInscription: (email: string, code: string) => Promise<void>;
   motDePasseOublie: (email: string) => Promise<void>;
@@ -40,10 +80,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const connexion = useCallback(async (email: string, motDePasse: string) => {
-    const utilisateur = await cognito.connexion(email.trim().toLowerCase(), motDePasse);
-    setUser(utilisateur);
-    return utilisateur;
+    const resultat = await cognito.connexion(email.trim().toLowerCase(), motDePasse);
+
+    // Tant que le défi dure, aucun utilisateur n'est posé : la session
+    // n'est pas ouverte, et l'interface ne doit surtout pas croire le
+    // contraire — elle laisserait passer vers le tableau de bord
+    // quelqu'un qui n'a pas encore de jeton.
+    if (resultat.etat === 'connecte') setUser(resultat.utilisateur);
+    return resultat;
   }, []);
+
+  const choisirMotDePasse = useCallback(
+    async (session: string, email: string, nouveau: string) => {
+      const utilisateur = await cognito.repondreDefi(session, email, nouveau);
+      setUser(utilisateur);
+      return utilisateur;
+    },
+    [],
+  );
 
   const inscription = useCallback(
     async (p: { email: string; motDePasse: string; prenom: string; nom: string }) => {
@@ -78,6 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         loading,
         connexion,
+        choisirMotDePasse,
         inscription,
         confirmerInscription,
         motDePasseOublie,

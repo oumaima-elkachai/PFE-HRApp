@@ -1,7 +1,7 @@
 // src/pages/admin/RecruitmentPipelinePage.tsx
 import { useState, useEffect } from 'react';
 import {
-  MoreHorizontal, Plus, Star, Paperclip,
+  MoreHorizontal,  Star, Paperclip,
   Calendar, Video, MapPin, Award, Filter,
   ChevronRight, Eye, X, Clock, Send,
   CheckCircle,
@@ -11,65 +11,35 @@ import api from '@/services/api';
 import type { Candidat, EntretienInfo } from '@/types';
 import Layout from '@/components/layout/Layout';
 
-// ── Types ──────────────────────────────────────
-type EtapeKanban = 'SOUMIS' | 'PRESELECTION' | 'QUIZ_EN_ATTENTE' | 'QUIZ_COMPLETE' | 'ENTRETIEN' | 'OFFRE';
+
+import {
+  LIBELLES_STATUT_CANDIDATURE,
+  PIPELINE_RECRUTEMENT,
+} from '../../types/domaine';
+import type { StatutCandidature } from '../../types/domaine';
 
 // ── Config Kanban ──────────────────────────────
-const stageConfig: Record<EtapeKanban, {
-  label: string;
+// Style uniquement : les libellés viennent de types/domaine.ts, source
+// unique du vocabulaire métier. Deux tables pour le même vocabulaire
+// finissent toujours par diverger — c'est ce qui faisait afficher
+// « Quiz Done : 0 » alors qu'un candidat avait passé son quiz.
+const stageConfig: Record<string, {
   color: string;
   dotColor: string;
   emoji: string;
 }> = {
-  SOUMIS: {
-    label: 'Applied',
-    color: 'bg-blue-50',
-    dotColor: 'bg-blue-400',
-    emoji: '📥',
-  },
-  PRESELECTION: {
-    label: 'Screening',
-    color: 'bg-amber-50',
-    dotColor: 'bg-amber-400',
-    emoji: '📊',
-  },
-  QUIZ_EN_ATTENTE: {
-    label: 'Quiz Sent',
-    color: 'bg-indigo-50',
-    dotColor: 'bg-indigo-400',
-    emoji: '📝',
-  },
-  QUIZ_COMPLETE: {
-    label: 'Quiz Done',
-    color: 'bg-cyan-50',
-    dotColor: 'bg-cyan-400',
-    emoji: '✅',
-  },
-  ENTRETIEN: {
-    label: 'Interview',
-    color: 'bg-purple-50',
-    dotColor: 'bg-purple-400',
-    emoji: '🎙️',
-  },
-  OFFRE: {
-    label: 'Offer',
-    color: 'bg-[#4a7c59]/10',
-    dotColor: 'bg-[#4a7c59]',
-    emoji: '🎉',
-  },
+  SOUMIS:          { color: 'bg-blue-50',        dotColor: 'bg-blue-400',    emoji: '📥' },
+  PRESELECTION:    { color: 'bg-amber-50',       dotColor: 'bg-amber-400',   emoji: '📊' },
+  QUIZ_EN_ATTENTE: { color: 'bg-orange-50',      dotColor: 'bg-orange-400',  emoji: '⏳' },
+  QUIZ_ENVOYE:     { color: 'bg-indigo-50',      dotColor: 'bg-indigo-400',  emoji: '📝' },
+  QUIZ_TERMINE:    { color: 'bg-cyan-50',        dotColor: 'bg-cyan-400',    emoji: '✅' },
+  ENTRETIEN:       { color: 'bg-purple-50',      dotColor: 'bg-purple-400',  emoji: '🎙️' },
+  OFFRE:           { color: 'bg-brand-500/10',   dotColor: 'bg-brand-500',   emoji: '🎉' },
 };
 
-// Labels des statuts
-const statutLabels: Record<string, string> = {
-  SOUMIS: 'Soumis',
-  PRESELECTION: 'Présélection',
-  QUIZ_EN_ATTENTE: 'Quiz Envoyé',
-  QUIZ_COMPLETE: 'Quiz Fait',
-  ENTRETIEN: 'Entretien',
-  OFFRE: 'Offre',
-  EMBAUCHE: 'Embauché',
-  REFUSE: 'Refusé',
-};
+const STYLE_DEFAUT = { color: 'bg-gray-50', dotColor: 'bg-gray-400', emoji: '📋' };
+
+
 
 // ── Toast Notification ─────────────────────────
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
@@ -79,11 +49,11 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   }, [onClose]);
 
   return (
-    <div className="fixed top-4 right-4 z-60 animate-in slide-in-from-top-2 duration-300">
-      <div className="bg-[#2d6a4f] text-white rounded-xl px-5 py-3 shadow-lg flex items-center gap-3 min-w-75">
+    <div className="fixed top-4 end-4 z-60 animate-in slide-in-from-top-2 duration-300">
+      <div className="bg-brand-600 text-white rounded-xl px-5 py-3 shadow-lg flex items-center gap-3 min-w-75">
         <CheckCircle className="w-5 h-5 shrink-0" />
         <p className="text-sm font-medium">{message}</p>
-        <button onClick={onClose} className="ml-auto text-white/80 hover:text-white">
+        <button onClick={onClose} className="ms-auto text-white/80 hover:text-white">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -133,17 +103,17 @@ function ModalEntretien({ candidat, onClose, onSave }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
+      <div className="bg-surface rounded-2xl w-full max-w-md shadow-xl">
         {/* Header - Même style que RecruitmentPage */}
-        <div className="flex items-center justify-between p-6 border-b border-[#e5e0d8]">
+        <div className="flex items-center justify-between p-6 border-b border-stone-200">
           <div>
             <h2 className="font-serif text-lg font-semibold text-stone-800">Planifier un entretien</h2>
-            <p className="text-xs text-[#6b7280] mt-0.5">
+            <p className="text-xs text-stone-500 mt-0.5">
               {candidat.prenom} {candidat.nom} — {candidat.posteVise}
             </p>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-[#f5f0e8] rounded-lg transition-colors">
-            <X className="w-5 h-5 text-[#6b7280]" />
+          <button onClick={onClose} className="p-1 hover:bg-stone-100 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-stone-500" />
           </button>
         </div>
 
@@ -157,7 +127,7 @@ function ModalEntretien({ candidat, onClose, onSave }: {
                 className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-medium border transition-all ${
                   form.type === 'en_ligne'
                     ? 'bg-purple-50 text-purple-700 border-purple-300'
-                    : 'bg-white text-[#6b7280] border-[#e5e0d8] hover:border-purple-300'
+                    : 'bg-surface text-stone-500 border-stone-200 hover:border-purple-300'
                 }`}
               >
                 <Video className="w-4 h-4" /> En ligne
@@ -167,7 +137,7 @@ function ModalEntretien({ candidat, onClose, onSave }: {
                 className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-medium border transition-all ${
                   form.type === 'sur_site'
                     ? 'bg-purple-50 text-purple-700 border-purple-300'
-                    : 'bg-white text-[#6b7280] border-[#e5e0d8] hover:border-purple-300'
+                    : 'bg-surface text-stone-500 border-stone-200 hover:border-purple-300'
                 }`}
               >
                 <MapPin className="w-4 h-4" /> Sur site
@@ -183,7 +153,7 @@ function ModalEntretien({ candidat, onClose, onSave }: {
                 value={form.date}
                 onChange={e => setForm({ ...form, date: e.target.value })}
                 min={new Date().toISOString().split('T')[0]}
-                className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-purple-400"
+                className="w-full px-3 py-2.5 text-sm bg-stone-100 border border-stone-200 rounded-xl focus:outline-none focus:border-purple-400"
               />
             </div>
             <div>
@@ -191,7 +161,7 @@ function ModalEntretien({ candidat, onClose, onSave }: {
               <input type="time" required
                 value={form.heure}
                 onChange={e => setForm({ ...form, heure: e.target.value })}
-                className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-purple-400"
+                className="w-full px-3 py-2.5 text-sm bg-stone-100 border border-stone-200 rounded-xl focus:outline-none focus:border-purple-400"
               />
             </div>
           </div>
@@ -206,7 +176,7 @@ function ModalEntretien({ candidat, onClose, onSave }: {
                 value={form.lien}
                 onChange={e => setForm({ ...form, lien: e.target.value })}
                 placeholder="https://meet.google.com/... ou https://zoom.us/..."
-                className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-purple-400"
+                className="w-full px-3 py-2.5 text-sm bg-stone-100 border border-stone-200 rounded-xl focus:outline-none focus:border-purple-400"
               />
             </div>
           ) : (
@@ -218,7 +188,7 @@ function ModalEntretien({ candidat, onClose, onSave }: {
                 value={form.adresse}
                 onChange={e => setForm({ ...form, adresse: e.target.value })}
                 placeholder="123 Rue Example, Casablanca..."
-                className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-purple-400"
+                className="w-full px-3 py-2.5 text-sm bg-stone-100 border border-stone-200 rounded-xl focus:outline-none focus:border-purple-400"
               />
             </div>
           )}
@@ -231,14 +201,14 @@ function ModalEntretien({ candidat, onClose, onSave }: {
               onChange={e => setForm({ ...form, notes: e.target.value })}
               rows={2}
               placeholder="Instructions pour le candidat..."
-              className="w-full px-3 py-2.5 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-purple-400 resize-none"
+              className="w-full px-3 py-2.5 text-sm bg-stone-100 border border-stone-200 rounded-xl focus:outline-none focus:border-purple-400 resize-none"
             />
           </div>
 
           {/* Boutons */}
           <div className="flex gap-3 pt-2">
             <button onClick={onClose}
-              className="flex-1 border border-[#e5e0d8] rounded-xl py-2.5 text-sm font-medium hover:bg-[#f5f0e8] transition-colors">
+              className="flex-1 border border-stone-200 rounded-xl py-2.5 text-sm font-medium hover:bg-stone-100 transition-colors">
               Annuler
             </button>
             <button onClick={handleSave} disabled={loading || !form.date}
@@ -274,31 +244,31 @@ function CandidateCard({ candidat, onVoir }: {
       onClick={() => onVoir(candidat)}
       className={`p-4 rounded-2xl shadow-sm border hover:shadow-md transition-shadow cursor-pointer ${
         isOffer
-          ? 'bg-[#4a7c59]/5 border-[#4a7c59]/20'
-          : 'bg-white border-stone-100'
+          ? 'bg-brand-500/5 border-brand-500/20'
+          : 'bg-surface border-stone-100'
       }`}
     >
       <div className="flex justify-between items-start mb-3">
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${
           isOffer
-            ? 'bg-[#4a7c59] text-white'
-            : 'bg-[#4a7c59]/10 text-[#4a7c59]'
+            ? 'bg-brand-500 text-white'
+            : 'bg-brand-500/10 text-brand-texte'
         }`}>
           {initiales}
         </div>
         <span className={`text-[10px] font-bold px-2 py-1 rounded ${
           isOffer
-            ? 'bg-[#4a7c59]/20 text-[#4a7c59]'
+            ? 'bg-brand-500/20 text-brand-texte'
             : 'bg-stone-50 text-stone-500'
         }`}>
-          {isOffer ? 'Sent' : dateRelative(candidat.soumisLe)}
+          {isOffer ? 'Sent' : dateRelative(candidat.creeLe)}
         </span>
       </div>
 
       <h4 className="font-bold text-stone-800 leading-tight">
         {candidat.prenom} {candidat.nom}
       </h4>
-      <p className="text-xs text-[#4a7c59] font-semibold mt-1">
+      <p className="text-xs text-brand-texte font-semibold mt-1">
         {candidat.offreTitre || candidat.posteVise}
       </p>
 
@@ -316,28 +286,29 @@ function CandidateCard({ candidat, onVoir }: {
             <MapPin className="w-3.5 h-3.5" />
           )}
           <span className="font-medium">
-            {new Date(candidat.entretien.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            {new Date(candidat.entretien.date).toLocaleDateString('fr-FR', { month: 'short', day: 'numeric' })}
             {' '}{candidat.entretien.heure}
           </span>
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-between pt-3 border-t border-stone-100">
-        {candidat.quizResult?.scoreQuiz ? (
+        <div className="mt-4 flex items-center justify-between pt-3 border-t border-stone-100">
+        {candidat.scoreQuiz != null ? (
           <div className="flex items-center gap-1">
             <Award className="w-3.5 h-3.5 text-cyan-500" />
             <span className="text-xs font-bold text-stone-600">
-              Quiz: {candidat.quizResult.scoreQuiz}/100
+              Quiz&nbsp;: {candidat.scoreQuiz}/100
+              {candidat.scoreTotal != null && ` · global ${candidat.scoreTotal}/100`}
             </span>
           </div>
         ) : (
           <div className="flex items-center gap-1 text-stone-400">
             <Clock className="w-3.5 h-3.5" />
-            <span className="text-xs">Pending</span>
+            <span className="text-xs">En attente</span>
           </div>
         )}
 
-        <div className="flex items-center gap-1 text-xs text-[#4a7c59] font-medium">
+        <div className="flex items-center gap-1 text-xs text-brand-texte font-medium">
           <Eye className="w-3 h-3" />
           View
         </div>
@@ -357,10 +328,14 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
   const [commentaire, setCommentaire] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const statuts = [
-    'SOUMIS', 'PRESELECTION', 'QUIZ_EN_ATTENTE',
-    'QUIZ_COMPLETE', 'ENTRETIEN', 'OFFRE', 'EMBAUCHE', 'REFUSE',
+    const statuts = [
+    'SOUMIS', 'PRESELECTION', 'QUIZ_EN_ATTENTE', 'QUIZ_ENVOYE',
+    'QUIZ_TERMINE', 'ENTRETIEN', 'OFFRE', 'EMBAUCHE', 'REFUSE',
   ];
+
+  
+
+  
 
   const handleSave = async () => {
     if (!onChangerStatut) return;
@@ -372,19 +347,19 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-surface rounded-2xl w-full max-w-lg shadow-xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-[#e5e0d8] sticky top-0 bg-white z-10">
+        <div className="flex items-center justify-between p-6 border-b border-stone-200 sticky top-0 bg-surface z-10">
           <div>
             <h2 className="font-serif text-lg font-semibold text-stone-800">
               {candidat.prenom} {candidat.nom}
             </h2>
-            <p className="text-sm text-[#6b7280] mt-0.5">
+            <p className="text-sm text-stone-500 mt-0.5">
               {candidat.offreTitre || candidat.posteVise}
             </p>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-[#f5f0e8] rounded-lg transition-colors">
-            <X className="w-5 h-5 text-[#6b7280]" />
+          <button onClick={onClose} className="p-1 hover:bg-stone-100 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-stone-500" />
           </button>
         </div>
 
@@ -397,26 +372,26 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
               { l: 'Niveau',     v: candidat.niveauEtude || '—' },
               { l: 'Expérience', v: candidat.experience || '—' },
             ].map(({ l, v }) => (
-              <div key={l} className="bg-[#f5f0e8] rounded-xl p-3">
-                <div className="text-xs text-[#6b7280] mb-1">{l}</div>
-                <div className="text-sm font-medium text-[#1a1a1a] truncate">{v}</div>
+              <div key={l} className="bg-stone-100 rounded-xl p-3">
+                <div className="text-xs text-stone-500 mb-1">{l}</div>
+                <div className="text-sm font-medium text-stone-900 truncate">{v}</div>
               </div>
             ))}
           </div>
 
           {/* Scores */}
-          <div className="bg-linear-to-r from-[#f5f0e8] to-[#d8f3dc] rounded-xl p-4">
+          <div className="bg-linear-to-r from-stone-100 to-brand-100 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
-              <Award className="w-4 h-4 text-[#2d6a4f]" />
-              <span className="text-xs font-semibold text-[#1a1a1a] uppercase tracking-wider">Scores</span>
+              <Award className="w-4 h-4 text-brand-texte" />
+              <span className="text-xs font-semibold text-stone-900 uppercase tracking-wider">Scores</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white rounded-lg p-3 text-center">
-                <div className="text-2xl font-bold text-[#1a1a1a]">
+              <div className="bg-surface rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-stone-900">
                   {candidat.scoreCV ?? '—'}
-                  <span className="text-sm text-[#6b7280] font-normal">/100</span>
+                  <span className="text-sm text-stone-500 font-normal">/100</span>
                 </div>
-                <div className="text-xs text-[#6b7280] mt-1">Score CV</div>
+                <div className="text-xs text-stone-500 mt-1">Score CV</div>
                 {candidat.scoreCV !== undefined && (
                   <div className="w-full bg-gray-200 rounded-full h-1.5 mt-2">
                     <div
@@ -430,26 +405,28 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
                 )}
               </div>
 
-              <div className="bg-white rounded-lg p-3 text-center">
-                <div className="text-2xl font-bold text-[#1a1a1a]">
-                  {candidat.quizResult?.scoreQuiz ?? '—'}
-                  <span className="text-sm text-[#6b7280] font-normal">/100</span>
+              <div className="bg-surface rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-stone-900">
+                  {candidat.scoreQuiz ?? '—'}
+                  <span className="text-sm text-stone-500 font-normal">/100</span>
                 </div>
-                <div className="text-xs text-[#6b7280] mt-1">Score Quiz</div>
-                {candidat.quizResult && (
+                <div className="text-xs text-stone-500 mt-1">Score Quiz</div>
+                {candidat.scoreQuiz != null && (
                   <>
                     <div className="w-full bg-gray-200 rounded-full h-1.5 mt-2">
                       <div
                         className={`h-1.5 rounded-full ${
-                          candidat.quizResult.scoreQuiz >= 80 ? 'bg-green-500' :
-                          candidat.quizResult.scoreQuiz >= 60 ? 'bg-amber-500' : 'bg-red-400'
+                          candidat.scoreQuiz >= 80 ? 'bg-green-500' :
+                          candidat.scoreQuiz >= 60 ? 'bg-amber-500' : 'bg-red-400'
                         }`}
-                        style={{ width: `${candidat.quizResult.scoreQuiz}%` }}
+                        style={{ width: `${candidat.scoreQuiz}%` }}
                       />
                     </div>
-                    <div className="text-[10px] text-[#9ca3af] mt-1">
-                      {candidat.quizResult.bonnesReponses}/{candidat.quizResult.totalQuestions} bonnes réponses
-                    </div>
+                    {candidat.scoreTotal != null && (
+  <div className="text-[10px] text-stone-400 mt-1">
+    Score global : {candidat.scoreTotal}/100
+  </div>
+)}
                   </>
                 )}
               </div>
@@ -459,10 +436,10 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
           {/* Compétences */}
           {candidat.competences?.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-[#6b7280] mb-2">Compétences</div>
+              <div className="text-xs font-medium text-stone-500 mb-2">Compétences</div>
               <div className="flex flex-wrap gap-1.5">
                 {candidat.competences.map((c, i) => (
-                  <span key={i} className="text-xs bg-[#d8f3dc] text-[#2d6a4f] px-2.5 py-1 rounded-full font-medium">
+                  <span key={i} className="text-xs bg-brand-100 text-brand-texte px-2.5 py-1 rounded-full font-medium">
                     {c}
                   </span>
                 ))}
@@ -501,8 +478,8 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
           </div>
 
           {/* Changer statut */}
-          <div className="border-t border-[#f0ebe0] pt-4">
-            <div className="text-xs font-medium text-[#6b7280] mb-3">
+          <div className="border-t border-stone-200 pt-4">
+            <div className="text-xs font-medium text-stone-500 mb-3">
               Faire avancer dans le pipeline
             </div>
             <div className="grid grid-cols-4 gap-1.5 mb-3">
@@ -511,13 +488,13 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
                   onClick={() => setNouveauStatut(s as any)}
                   className={`px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all border ${
                     nouveauStatut === s
-                      ? 'bg-[#2d6a4f] text-white border-[#2d6a4f]'
+                      ? 'bg-brand-600 text-white border-brand-600'
                       : s === 'REFUSE'
-                        ? 'bg-white text-red-500 border-red-200 hover:border-red-400'
-                        : 'bg-white text-[#6b7280] border-[#e5e0d8] hover:border-[#2d6a4f]'
+                        ? 'bg-surface text-red-500 border-red-200 hover:border-red-400'
+                        : 'bg-surface text-stone-500 border-stone-200 hover:border-brand-600'
                   }`}
                 >
-                  {statutLabels[s]}
+                  {LIBELLES_STATUT_CANDIDATURE[s as StatutCandidature]}
                 </button>
               ))}
             </div>
@@ -526,24 +503,25 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
               onChange={e => setCommentaire(e.target.value)}
               placeholder="Commentaire (optionnel)..."
               rows={2}
-              className="w-full px-3 py-2 text-sm bg-[#f5f0e8] border border-[#e5e0d8] rounded-xl focus:outline-none focus:border-[#2d6a4f] resize-none"
+              className="w-full px-3 py-2 text-sm bg-stone-100 border border-stone-200 rounded-xl focus:outline-none focus:border-brand-600 resize-none"
             />
           </div>
 
           {/* Historique */}
-          {candidat.historiqueStatuts?.length > 0 && (
+          {(candidat.historiqueStatuts?.length ?? 0) > 0 && (
+
             <div>
-              <div className="text-xs font-medium text-[#6b7280] mb-2">Historique</div>
+              <div className="text-xs font-medium text-stone-500 mb-2">Historique</div>
               <div className="space-y-2 max-h-28 overflow-y-auto">
-                {[...candidat.historiqueStatuts].reverse().map((h, i) => (
+                {[...(candidat.historiqueStatuts ?? [])].reverse().map((h, i) => (
                   <div key={i} className="flex items-start gap-2 text-xs">
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#2d6a4f] mt-1.5 shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-brand-600 mt-1.5 shrink-0" />
                     <div>
-                      <span className="font-medium text-[#1a1a1a]">
-                        {statutLabels[h.statut] || h.statut}
+                      <span className="font-medium text-stone-900">
+                       {LIBELLES_STATUT_CANDIDATURE[h.statut as StatutCandidature] ?? h.statut}
                       </span>
-                      {h.commentaire && <span className="text-[#6b7280] ml-1">— {h.commentaire}</span>}
-                      <div className="text-[#9ca3af]">
+                      {h.commentaire && <span className="text-stone-500 ms-1">— {h.commentaire}</span>}
+                      <div className="text-stone-400">
                         {new Date(h.date).toLocaleDateString('fr-FR')}
                       </div>
                     </div>
@@ -556,8 +534,8 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
           {/* Lettre motivation */}
           {candidat.lettreMotivation && (
             <div>
-              <div className="text-xs font-medium text-[#6b7280] mb-2">Lettre de motivation</div>
-              <p className="text-xs text-[#374151] bg-[#f5f0e8] rounded-xl p-3 leading-relaxed line-clamp-4">
+              <div className="text-xs font-medium text-stone-500 mb-2">Lettre de motivation</div>
+              <p className="text-xs text-stone-700 bg-stone-100 rounded-xl p-3 leading-relaxed line-clamp-4">
                 {candidat.lettreMotivation}
               </p>
             </div>
@@ -565,7 +543,7 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
 
           {/* CV */}
           {candidat.cvFileName && (
-            <div className="flex items-center gap-2 text-xs text-[#2d6a4f] bg-[#d8f3dc] px-3 py-2 rounded-xl w-fit">
+            <div className="flex items-center gap-2 text-xs text-brand-texte bg-brand-100 px-3 py-2 rounded-xl w-fit">
               <Paperclip className="w-3.5 h-3.5" />
               {candidat.cvFileName}
             </div>
@@ -574,11 +552,11 @@ function ModalCandidatDetail({ candidat, onClose, onChangerStatut, onPlanifierEn
           {/* Boutons */}
           <div className="flex gap-3">
             <button onClick={onClose}
-              className="flex-1 border border-[#e5e0d8] rounded-xl py-2.5 text-sm font-medium hover:bg-[#f5f0e8] transition-colors">
+              className="flex-1 border border-stone-200 rounded-xl py-2.5 text-sm font-medium hover:bg-stone-100 transition-colors">
               Annuler
             </button>
             <button onClick={handleSave} disabled={loading}
-              className="flex-1 bg-[#2d6a4f] hover:bg-[#1b4332] text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-60 transition-colors">
+              className="flex-1 bg-brand-600 hover:bg-brand-800 text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-60 transition-colors">
               {loading ? 'Sauvegarde...' : 'Sauvegarder'}
             </button>
           </div>
@@ -597,10 +575,10 @@ export default function RecruitmentPipelinePage() {
   const [showToast,           setShowToast]           = useState(false);
   const [toastMessage,        setToastMessage]        = useState('');
 
-  const stages: EtapeKanban[] = [
-    'SOUMIS', 'PRESELECTION', 'QUIZ_EN_ATTENTE',
-    'QUIZ_COMPLETE', 'ENTRETIEN', 'OFFRE',
-  ];
+    // L'ordre des colonnes vient de types/domaine.ts : une seule source
+  // à maintenir quand le processus évolue. EMBAUCHE est écarté, il
+  // clôt le parcours plutôt que de constituer une étape en cours.
+  const stages = PIPELINE_RECRUTEMENT.filter((s) => s !== 'EMBAUCHE');
 
   // Chargement
   useEffect(() => {
@@ -659,7 +637,7 @@ export default function RecruitmentPipelinePage() {
   };
 
   return (
-    <div className="bg-[#faf6f0] min-h-screen">
+    <div className="bg-stone-50 min-h-screen">
       <Layout>
         {/* Header */}
         <div className="px-8 py-6 flex justify-between items-end border-b border-stone-200">
@@ -667,7 +645,7 @@ export default function RecruitmentPipelinePage() {
             <nav className="flex text-xs text-stone-500 mb-2 gap-2 items-center">
               <span>Recruitment</span>
               <ChevronRight className="w-3 h-3" />
-              <span className="text-[#4a7c59] font-semibold">Pipeline</span>
+              <span className="text-brand-texte font-semibold">Pipeline</span>
             </nav>
             <h2 className="text-3xl font-bold text-stone-800">Recruitment Pipeline</h2>
             <p className="text-stone-500 mt-1">
@@ -675,14 +653,11 @@ export default function RecruitmentPipelinePage() {
             </p>
           </div>
           <div className="flex gap-3">
-            <button className="flex items-center gap-2 px-4 py-2 bg-white border border-stone-200 rounded-xl text-stone-600 font-semibold hover:bg-stone-50 transition-colors shadow-sm">
+            <button className="flex items-center gap-2 px-4 py-2 bg-surface border border-stone-200 rounded-xl text-stone-600 font-semibold hover:bg-stone-50 transition-colors shadow-sm">
               <Filter className="w-4 h-4" />
               Filter
             </button>
-            <button className="flex items-center gap-2 px-5 py-2 bg-[#4a7c59] text-white rounded-xl font-bold hover:bg-[#3d664a] transition-colors shadow-md shadow-[#4a7c59]/20">
-              <Plus className="w-5 h-5" />
-              Add Candidate
-            </button>
+           
           </div>
         </div>
 
@@ -690,7 +665,7 @@ export default function RecruitmentPipelinePage() {
         <div className="flex-1 overflow-x-auto px-8 py-8 custom-scrollbar">
           <div className="flex gap-6 h-full min-w-max">
             {stages.map(stage => {
-              const config  = stageConfig[stage];
+              const config = stageConfig[stage] ?? STYLE_DEFAUT;
               const colonne = candidats.filter(c => c.statut === stage);
 
               return (
@@ -699,7 +674,7 @@ export default function RecruitmentPipelinePage() {
                     <div className="flex items-center gap-2">
                       <span className={`w-2 h-2 rounded-full ${config.dotColor}`} />
                       <h3 className="font-bold text-stone-700 uppercase text-xs tracking-widest">
-                        {config.label}
+                                                {LIBELLES_STATUT_CANDIDATURE[stage] ?? stage}
                       </h3>
                       <span className="bg-stone-200 text-stone-600 text-[10px] font-bold px-2 py-0.5 rounded-full">
                         {loading ? '...' : colonne.length}
@@ -710,10 +685,10 @@ export default function RecruitmentPipelinePage() {
                     </button>
                   </div>
 
-                  <div className="flex-1 space-y-4 overflow-y-auto custom-scrollbar pr-1">
+                  <div className="flex-1 space-y-4 overflow-y-auto custom-scrollbar pe-1">
                     {loading ? (
                       [...Array(2)].map((_, i) => (
-                        <div key={i} className="bg-white rounded-2xl border border-stone-100 p-4 animate-pulse">
+                        <div key={i} className="bg-surface rounded-2xl border border-stone-100 p-4 animate-pulse">
                           <div className="flex justify-between items-start mb-3">
                             <div className="w-10 h-10 bg-stone-100 rounded-xl" />
                             <div className="h-4 bg-stone-100 rounded w-16" />
@@ -774,7 +749,7 @@ export default function RecruitmentPipelinePage() {
             background: transparent;
           }
           .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #e7e5e4;
+            background: #DFE3F0;
             border-radius: 10px;
           }
         `}</style>

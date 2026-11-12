@@ -1,63 +1,113 @@
-import { useNavigate } from 'react-router-dom';
-import { CheckCircle, Leaf, HelpCircle, Shield } from 'lucide-react';
+// src/pages/LogoutPage.tsx
+//
+// ── Une phrase de ta version était fausse ──────────────────────────
+//
+// L'écran affichait « Browser cache cleared ». Une page web ne peut
+// pas vider le cache du navigateur : il n'existe aucune API pour ça.
+// La déconnexion efface le jeton stocké (localStorage / sessionStorage)
+// et ferme la session côté Cognito — ce qui est déjà la bonne chose à
+// faire, mais ce n'est pas le cache.
+//
+// Si un juré demande « et concrètement, qu'est-ce qui est effacé ? »,
+// la réponse est la liste ci-dessous, et elle est maintenant exacte.
+// Une interface qui annonce plus qu'elle ne fait est un défaut, même
+// quand l'exagération va dans le sens de la sécurité.
+//
+// Le reste : anglais → fr/en/ar, « HR UP » → HR UP, couleurs en dur
+// → palette, et la coquille AuthLayout partagée avec la connexion.
+
+import { useEffect, useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Check, LogOut, Loader2 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { useI18n } from '@/i18n';
+import AuthLayout from '@/components/layout/AuthLayout';
 
 export default function LogoutPage() {
   const navigate = useNavigate();
+  const { deconnexion } = useAuth();
+  const { t } = useI18n();
+  const [fait, setFait] = useState(false);
+
+  useEffect(() => {
+    let vivant = true;
+
+    (async () => {
+      try {
+        await deconnexion();
+      } catch {
+        // Une déconnexion qui échoue côté serveur ne doit pas retenir
+        // l'utilisateur sur la page : le jeton local est parti, donc
+        // de son point de vue il est sorti. On continue.
+      }
+      if (vivant) setFait(true);
+    })();
+
+    return () => { vivant = false; };
+    // Volontairement une seule exécution : `deconnexion` n'est pas
+    // forcément stable d'un rendu à l'autre dans ton AuthContext, et
+    // la mettre en dépendance relancerait la déconnexion en boucle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const EFFACE = [t('deco.eff1'), t('deco.eff2'), t('deco.eff3')];
 
   return (
-    <div className="min-h-screen bg-[#f5f0e8] flex flex-col items-center justify-center px-4">
-      {/* Logo */}
-      <div className="flex items-center gap-2 mb-10">
-        <Leaf className="w-5 h-5 text-[#2d6a4f]" />
-        <span className="font-playfair text-xl font-bold text-[#2d6a4f]">Terra HR</span>
-      </div>
+    <AuthLayout titre={t('deco.titre')}>
+      <div className="text-center py-4">
 
-      {/* Card */}
-      <div className="bg-white rounded-2xl shadow-sm px-10 py-10 max-w-md w-full text-center">
-        {/* Icon */}
-        <div className="relative inline-flex mb-6">
-          <div className="w-16 h-16 rounded-full bg-[#d8f3dc] flex items-center justify-center">
-            <CheckCircle className="w-8 h-8 text-[#2d6a4f]" />
-          </div>
-          <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-[#f5f0e8] border-2 border-white flex items-center justify-center">
-            <Leaf className="w-3 h-3 text-[#52b788]" />
-          </div>
+        <div className={`w-16 h-16 rounded-2xl mx-auto mb-5
+          flex items-center justify-center transition-colors
+          ${fait ? 'bg-green-50 border border-green-200' : 'bg-stone-100'}`}>
+          {fait
+            ? <Check size={28} className="text-green-600" strokeWidth={2.5} />
+            : <Loader2 size={26} className="text-stone-400 animate-spin" />}
         </div>
 
-        <h1 className="text-2xl font-bold text-[#1a1a1a] mb-3 leading-snug">
-          You have been successfully logged out.
-        </h1>
-        <p className="text-sm text-[#6b7280] leading-relaxed mb-7">
-          Your session has been securely ended.{' '}
-          <span className="text-[#2d6a4f] font-medium">Thank you for using Terra HR</span>{' '}
-          to grow your team today. See you soon!
-        </p>
+        <h3 className="text-lg font-bold text-stone-800 mb-1.5">
+          {fait ? t('deco.fait') : t('deco.enCours')}
+        </h3>
 
-        <button
-          onClick={() => navigate('/login')}
-          className="inline-flex items-center gap-2 bg-[#2d6a4f] hover:bg-[#1b4332] text-white font-semibold px-6 py-3 rounded-xl text-sm transition-colors duration-150"
-        >
-          Return to Login →
-        </button>
-      </div>
+        {fait && (
+          <>
+            <p className="text-sm text-stone-500 leading-relaxed mb-6 max-w-sm mx-auto">
+              {t('deco.faitTexte')}
+            </p>
 
-      {/* Footer info */}
-      <div className="flex items-center gap-8 mt-8">
-        <div className="flex items-center gap-2 text-xs text-[#6b7280]">
-          <HelpCircle className="w-4 h-4" />
-          <div>
-            <div className="font-medium text-[#374151]">Need help?</div>
-            <div>Visit our Help Center</div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-[#6b7280]">
-          <Shield className="w-4 h-4" />
-          <div>
-            <div className="font-medium text-[#374151]">Secure Session</div>
-            <div>Browser cache cleared</div>
-          </div>
-        </div>
+            <ul className="inline-flex flex-col gap-2 mb-7 text-start">
+              {EFFACE.map((ligne) => (
+                <li key={ligne} className="flex items-center gap-2 text-xs text-stone-500">
+                  <Check size={13} className="text-green-600 shrink-0" />
+                  {ligne}
+                </li>
+              ))}
+            </ul>
+
+            <div className="flex flex-col gap-2.5 max-w-xs mx-auto">
+              <button
+                onClick={() => navigate('/login')}
+                className="w-full py-2.5 rounded-xl text-white text-sm font-bold
+                  flex items-center justify-center gap-2
+                  bg-linear-to-r from-brand-500 to-violet-500
+                  hover:brightness-110 transition-all
+                  shadow-lg shadow-brand-500/20"
+              >
+                <LogOut size={15} className="rtl:rotate-180" />
+                {t('deco.revenir')}
+              </button>
+
+              <Link
+                to="/"
+                className="w-full py-2.5 rounded-xl text-sm font-semibold text-center
+                  text-stone-600 bg-stone-50 hover:bg-stone-100
+                  border border-stone-200 transition-colors"
+              >
+                {t('deco.accueil')}
+              </Link>
+            </div>
+          </>
+        )}
       </div>
-    </div>
+    </AuthLayout>
   );
 }

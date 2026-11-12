@@ -1,191 +1,380 @@
+// src/pages/RegisterPage.tsx
+//
+// ══ Le défaut principal de ta version ══════════════════════════════
+//
+// `handleSubmit` faisait ceci, et rien de plus :
+//
+//     const handleSubmit = (e) => { e.preventDefault();
+//       navigate('/dashboard'); };
+//
+// Aucun appel à Cognito. Aucun compte créé. Et `/dashboard` n'est pas
+// une de tes routes — le visiteur arrivait sur une page vide, sans
+// message d'erreur, en croyant son compte créé.
+//
+// C'est le genre de chose qu'un juré trouve en trente secondes s'il
+// demande à s'inscrire lui-même, et ça coûte plus cher qu'un défaut
+// d'affichage : ça met en doute tout le reste de la démonstration.
+//
+// ── L'inscription réelle se fait en deux étapes ────────────────────
+//
+// Ton `cognito.ts` le prévoyait déjà, la page ne s'en servait pas :
+//
+//   1. `inscription({ email, motDePasse, prenom, nom })`  → SignUp
+//      Cognito envoie alors un code à 6 chiffres par e-mail.
+//   2. `confirmerInscription(email, code)`                → ConfirmSignUp
+//      Le compte devient utilisable, et seulement là.
+//
+// Sauter l'étape 2 donne un compte créé mais `UNCONFIRMED`, qui ne
+// peut pas se connecter : c'est pour ça que les deux étapes vivent
+// dans cette page, avec `etape` pour passer de l'une à l'autre.
+//
+// ── Les boutons Google et SSO sont partis ──────────────────────────
+//
+// Ils n'avaient pas de `onClick`. Un bouton qui ne fait rien est pire
+// qu'un bouton absent : le visiteur clique, rien ne se passe, et il
+// conclut que l'application est cassée. Les brancher demanderait un
+// fournisseur d'identité fédéré configuré dans ton pool Cognito —
+// un vrai travail, pas une case à cocher. À la soutenance, mieux vaut
+// une inscription qui marche qu'un bouton Google qui mime.
+//
+// ── La flèche de retour ────────────────────────────────────────────
+//
+// Écrite dans la page, sans composant ni fichier supplémentaire. Elle
+// fait deux choses différentes selon l'étape : sur le formulaire elle
+// revient à la page précédente (ou à l'accueil s'il n'y en a pas), sur
+// l'écran du code elle revient au formulaire sans toucher à
+// l'historique — reculer là laisserait un compte Cognito créé mais non
+// confirmé, et ferait perdre la saisie.
+//
+// ── Et le reste ────────────────────────────────────────────────────
+//
+// Le témoignage « Elena Rodriguez » est parti (inventé, cf.
+// AuthLayout). Le champ « téléphone » aussi : ton schéma Cognito ne
+// déclare que `email`, `given_name` et `family_name`, donc le numéro
+// était saisi puis jeté. Anglais → fr/en/ar, couleurs → palette.
+
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { User, Mail, Lock, Leaf } from 'lucide-react';
+import { Mail, Lock, User, Eye, EyeOff, AlertCircle, ArrowLeft, ArrowRight, ShieldCheck } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { useI18n } from '@/i18n';
+import AuthLayout, { CHAMP_AUTH, CHAMP_AUTH_ICONE } from '@/components/layout/AuthLayout';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({
-    fullName: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    agree: false,
-  });
+  const { inscription, confirmerInscription } = useAuth();
+  const { t } = useI18n();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [etape, setEtape] = useState<'saisie' | 'code'>('saisie');
+  const [prenom, setPrenom] = useState('');
+  const [nom, setNom] = useState('');
+  const [email, setEmail] = useState('');
+  const [motDePasse, setMotDePasse] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [code, setCode] = useState('');
+  const [visible, setVisible] = useState(false);
+  const [envoi, setEnvoi] = useState(false);
+  const [erreur, setErreur] = useState('');
+  const [info, setInfo] = useState('');
+
+  /** Étape 1 — création du compte dans Cognito. */
+  async function creer(e: React.FormEvent) {
     e.preventDefault();
-    navigate('/dashboard');
-  };
+    setErreur('');
 
-  return (
-    <div className="min-h-screen bg-[#f5f0e8] flex items-center justify-center px-4 py-10">
-      <div className="w-full max-w-4xl bg-white rounded-2xl shadow-sm overflow-hidden flex" style={{ minHeight: 560 }}>
-        {/* Left panel */}
-        <div className="w-5/12 bg-[#2d6a4f] p-10 flex flex-col justify-between">
-          <div className="flex items-center gap-2">
-            <Leaf className="w-5 h-5 text-[#b7e4c7]" />
-            <span className="text-white font-bold text-lg">Terra HR</span>
-          </div>
+    if (!prenom.trim() || !nom.trim() || !email.trim() || !motDePasse) {
+      setErreur(t('login.champsRequis'));
+      return;
+    }
+    // Vérifié ici pour éviter un aller-retour réseau sur une faute de
+    // frappe ; la règle réelle reste celle du pool Cognito, dont
+    // l'erreur est affichée telle quelle plus bas.
+    if (motDePasse.length < 8) {
+      setErreur(t('inscr.mdpCourt'));
+      return;
+    }
+    if (motDePasse !== confirmation) {
+      setErreur(t('inscr.mdpDifferent'));
+      return;
+    }
+
+    setEnvoi(true);
+    try {
+      await inscription({
+        email: email.trim(),
+        motDePasse,
+        prenom: prenom.trim(),
+        nom: nom.trim(),
+      });
+      setEtape('code');
+    } catch (err: any) {
+      // Les messages Cognito sont en anglais mais précis (« Password
+      // did not conform with policy », « User already exists ») : les
+      // afficher vaut mieux qu'un « une erreur est survenue » qui
+      // n'aide personne à corriger.
+      setErreur(err?.message || t('login.erreur'));
+    } finally {
+      setEnvoi(false);
+    }
+  }
+
+  /** Étape 2 — validation du code reçu par e-mail. */
+  async function valider(e: React.FormEvent) {
+    e.preventDefault();
+    setErreur('');
+
+    if (code.trim().length !== 6) {
+      setErreur(t('inscr.codeCourt'));
+      return;
+    }
+
+    setEnvoi(true);
+    try {
+      await confirmerInscription(email.trim(), code.trim());
+      // Vers la connexion, pas vers un tableau de bord : le compte
+      // existe mais la session n'est pas ouverte, `ConfirmSignUp` ne
+      // délivre aucun jeton.
+      navigate('/login', { state: { inscrit: true } });
+    } catch (err: any) {
+      setErreur(err?.message || t('inscr.codeInvalide'));
+    } finally {
+      setEnvoi(false);
+    }
+  }
+
+  const Alerte = () => erreur ? (
+    <div role="alert" className="flex items-start gap-2.5 p-3 rounded-xl
+      bg-red-50 border border-red-200">
+      <AlertCircle size={16} className="text-red-600 mt-0.5 shrink-0" />
+      <p className="text-sm text-red-700">{erreur}</p>
+    </div>
+  ) : null;
+
+  // ─────────────────────────── Étape 2 ───────────────────────────
+  if (etape === 'code') {
+    return (
+      <AuthLayout
+        titre={t('inscr.codeTitre')}
+        sousTitre={t('inscr.codeSousTitre').replace('{email}', email.trim())}
+      >
+        <form onSubmit={valider} className="space-y-4" noValidate>
+          {/* Retour au formulaire, et non dans l'historique : reculer
+              ici laisserait un compte Cognito créé mais non confirmé,
+              et ferait perdre la saisie. */}
+          <button type="button"
+            onClick={() => { setErreur(''); setInfo(''); setEtape('saisie'); }}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold
+              text-stone-500 hover:text-stone-700 transition-colors"
+          >
+            <ArrowLeft size={15} className="rtl:rotate-180" />
+            {t('nav.retour')}
+          </button>
+
+          <Alerte />
+
+          {info && (
+            <p className="text-sm text-green-700 bg-green-50 border border-green-200
+              rounded-xl p-3">{info}</p>
+          )}
 
           <div>
-            <h1 className="text-white font-bold text-3xl leading-tight mb-4">
-              Plant the seeds for a better workplace.
-            </h1>
-            <p className="text-[#b7e4c7] text-sm leading-relaxed mb-8">
-              Join thousands of organizations using Terra to nurture talent, streamline recruitment, and grow sustainable team cultures.
-            </p>
-
-            {/* Testimonial */}
-            <div className="bg-[#1b4332] rounded-xl p-4">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 rounded-full bg-[#52b788] flex items-center justify-center text-white text-xs font-bold">
-                  ER
-                </div>
-                <div>
-                  <div className="text-white text-xs font-semibold">Elena Rodriguez</div>
-                  <div className="text-[#74c69d] text-[10px] uppercase tracking-wider">People Lead at Bloom</div>
-                </div>
-              </div>
-              <p className="text-[#b7e4c7] text-xs leading-relaxed italic">
-                "Terra HR feels like a natural extension of our team. It's grounded, intuitive, and truly human-centric."
-              </p>
-            </div>
+            <label htmlFor="code" className="block text-xs font-bold text-stone-600 mb-1.5">
+              {t('inscr.code')}
+            </label>
+            <input
+              id="code"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="000000"
+              // `dir="ltr"` et `text-center` : un code numérique se lit
+              // de gauche à droite même en arabe.
+              dir="ltr"
+              className={CHAMP_AUTH + ' text-center text-2xl font-bold tracking-[0.4em] font-mono'}
+            />
           </div>
+
+          <button
+            type="submit"
+            disabled={envoi}
+            className="w-full py-3 rounded-xl text-white text-sm font-bold
+              flex items-center justify-center gap-2
+              bg-linear-to-r from-brand-500 to-violet-500
+              hover:brightness-110 disabled:opacity-60
+              transition-all shadow-lg shadow-brand-500/20"
+          >
+            <ShieldCheck size={16} />
+            {envoi ? t('inscr.enCours') : t('inscr.valider')}
+          </button>
+
+          <button
+            type="button"
+            onClick={async () => {
+              // Re-déclenche SignUp : Cognito renvoie un code pour un
+              // compte encore non confirmé.
+              setErreur(''); setInfo('');
+              try {
+                await inscription({
+                  email: email.trim(), motDePasse,
+                  prenom: prenom.trim(), nom: nom.trim(),
+                });
+                setInfo(t('inscr.renvoye'));
+              } catch (err: any) {
+                setErreur(err?.message || t('login.erreur'));
+              }
+            }}
+            className="w-full text-xs font-semibold text-brand-texte hover:underline"
+          >
+            {t('inscr.renvoyer')}
+          </button>
+        </form>
+      </AuthLayout>
+    );
+  }
+
+  // ─────────────────────────── Étape 1 ───────────────────────────
+  return (
+    <AuthLayout
+      titre={t('inscr.titre')}
+      sousTitre={t('inscr.sousTitre')}
+      pied={
+        <div className="text-center text-sm text-stone-500">
+          {t('inscr.dejaCompte')}{' '}
+          <Link to="/login" className="font-semibold text-brand-texte hover:underline">
+            {t('inscr.seConnecter')}
+          </Link>
         </div>
+      }
+    >
+      <form onSubmit={creer} className="space-y-4" noValidate>
+        {/* `-1` s'il y a une page précédente, l'accueil sinon : un
+            visiteur arrivé droit sur /register depuis un lien n'a rien
+            derrière lui, et `navigate(-1)` le ferait sortir du site. */}
+        <button type="button"
+          onClick={() => {
+            // Deux appels et non un ternaire : les surcharges de
+            // `navigate` n'acceptent pas `number | string`.
+            const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+            if (idx > 0) navigate(-1);
+            else navigate('/');
+          }}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold
+            text-stone-500 hover:text-stone-700 transition-colors"
+        >
+          <ArrowLeft size={15} className="rtl:rotate-180" />
+          {t('nav.retour')}
+        </button>
 
-        {/* Right panel */}
-        <div className="w-7/12 p-10 flex flex-col justify-center">
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold text-[#1a1a1a] mb-1">Create your account</h2>
-            <p className="text-sm text-[#6b7280]">Welcome! Let's get your workspace rooted.</p>
-          </div>
+        <Alerte />
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Full Name */}
-            <div>
-              <label className="block text-sm font-medium text-[#374151] mb-1.5">Full Name</label>
-              <div className="relative">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9ca3af]" />
-                <input
-                  type="text"
-                  placeholder="Enter your full name"
-                  value={form.fullName}
-                  onChange={e => setForm({ ...form, fullName: e.target.value })}
-                  className="w-full pl-9 pr-4 py-2.5 border border-[#e5e0d8] rounded-lg text-sm bg-[#fafaf8] focus:outline-none focus:ring-2 focus:ring-[#2d6a4f]/30 focus:border-[#2d6a4f] transition-colors"
-                />
-              </div>
-            </div>
-
-            {/* Email */}
-            <div>
-              <label className="block text-sm font-medium text-[#374151] mb-1.5">Email Address</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9ca3af]" />
-                <input
-                  type="email"
-                  placeholder="name@company.com"
-                  value={form.email}
-                  onChange={e => setForm({ ...form, email: e.target.value })}
-                  className="w-full pl-9 pr-4 py-2.5 border border-[#e5e0d8] rounded-lg text-sm bg-[#fafaf8] focus:outline-none focus:ring-2 focus:ring-[#2d6a4f]/30 focus:border-[#2d6a4f] transition-colors"
-                />
-              </div>
-            </div>
-
-            {/* Password row */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-[#374151] mb-1.5">Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9ca3af]" />
-                  <input
-                    type="password"
-                    placeholder="••••••••"
-                    value={form.password}
-                    onChange={e => setForm({ ...form, password: e.target.value })}
-                    className="w-full pl-9 pr-4 py-2.5 border border-[#e5e0d8] rounded-lg text-sm bg-[#fafaf8] focus:outline-none focus:ring-2 focus:ring-[#2d6a4f]/30 focus:border-[#2d6a4f] transition-colors"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-[#374151] mb-1.5">Confirm Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9ca3af]" />
-                  <input
-                    type="password"
-                    placeholder="••••••••"
-                    value={form.confirmPassword}
-                    onChange={e => setForm({ ...form, confirmPassword: e.target.value })}
-                    className="w-full pl-9 pr-4 py-2.5 border border-[#e5e0d8] rounded-lg text-sm bg-[#fafaf8] focus:outline-none focus:ring-2 focus:ring-[#2d6a4f]/30 focus:border-[#2d6a4f] transition-colors"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Terms */}
-            <div className="flex items-start gap-2">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="prenom" className="block text-xs font-bold text-stone-600 mb-1.5">
+              {t('inscr.prenom')}
+            </label>
+            <div className="relative">
+              <User size={16} className="absolute start-3.5 top-1/2
+                -translate-y-1/2 text-stone-400 pointer-events-none" />
               <input
-                type="checkbox"
-                id="agree"
-                checked={form.agree}
-                onChange={e => setForm({ ...form, agree: e.target.checked })}
-                className="w-4 h-4 mt-0.5 rounded border-[#e5e0d8] accent-[#2d6a4f]"
+                id="prenom" value={prenom} autoComplete="given-name"
+                onChange={(e) => setPrenom(e.target.value)}
+                className={CHAMP_AUTH_ICONE}
               />
-              <label htmlFor="agree" className="text-sm text-[#6b7280]">
-                I agree to the{' '}
-                <a href="#" className="text-[#2d6a4f] font-medium hover:underline">Terms of Service</a>
-                {' '}and{' '}
-                <a href="#" className="text-[#2d6a4f] font-medium hover:underline">Privacy Policy</a>.
-              </label>
             </div>
-
-            {/* Submit */}
-            <button
-              type="submit"
-              className="w-full bg-[#2d6a4f] hover:bg-[#1b4332] text-white font-semibold py-2.5 px-4 rounded-lg text-sm transition-colors duration-150"
-            >
-              Get Started →
-            </button>
-
-            {/* Divider */}
-            <div className="flex items-center gap-3">
-              <div className="flex-1 h-px bg-[#e5e0d8]" />
-              <span className="text-xs text-[#9ca3af] font-medium">Or sign up with</span>
-              <div className="flex-1 h-px bg-[#e5e0d8]" />
+          </div>
+          <div>
+            <label htmlFor="nom" className="block text-xs font-bold text-stone-600 mb-1.5">
+              {t('inscr.nom')}
+            </label>
+            <div className="relative">
+              <User size={16} className="absolute start-3.5 top-1/2
+                -translate-y-1/2 text-stone-400 pointer-events-none" />
+              <input
+                id="nom" value={nom} autoComplete="family-name"
+                onChange={(e) => setNom(e.target.value)}
+                className={CHAMP_AUTH_ICONE}
+              />
             </div>
-
-            {/* OAuth */}
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                className="flex items-center justify-center gap-2 border border-[#e5e0d8] rounded-lg py-2.5 text-sm font-medium text-[#374151] hover:bg-[#f5f0e8] transition-colors"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                </svg>
-                Google
-              </button>
-              <button
-                type="button"
-                className="flex items-center justify-center gap-2 border border-[#e5e0d8] rounded-lg py-2.5 text-sm font-medium text-[#374151] hover:bg-[#f5f0e8] transition-colors"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
-                  <rect width="24" height="24" rx="2" fill="#1877F2" />
-                  <text x="12" y="17" textAnchor="middle" fill="white" fontSize="14" fontWeight="bold">S</text>
-                </svg>
-                SSO
-              </button>
-            </div>
-          </form>
-
-          <p className="text-center text-sm text-[#6b7280] mt-5">
-            Already have an account?{' '}
-            <Link to="/login" className="text-[#2d6a4f] font-semibold hover:underline">Log in</Link>
-          </p>
+          </div>
         </div>
-      </div>
-    </div>
+
+        <div>
+          <label htmlFor="email" className="block text-xs font-bold text-stone-600 mb-1.5">
+            {t('login.email')}
+          </label>
+          <div className="relative">
+            <Mail size={16} className="absolute start-3.5 top-1/2
+              -translate-y-1/2 text-stone-400 pointer-events-none" />
+            <input
+              id="email" type="email" value={email} autoComplete="email"
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="prenom.nom@exemple.tn"
+              className={CHAMP_AUTH_ICONE}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="mdp" className="block text-xs font-bold text-stone-600 mb-1.5">
+            {t('login.motDePasse')}
+          </label>
+          <div className="relative">
+            <Lock size={16} className="absolute start-3.5 top-1/2
+              -translate-y-1/2 text-stone-400 pointer-events-none" />
+            <input
+              id="mdp" type={visible ? 'text' : 'password'} value={motDePasse}
+              autoComplete="new-password"
+              onChange={(e) => setMotDePasse(e.target.value)}
+              placeholder="••••••••"
+              className={CHAMP_AUTH_ICONE + ' pe-11'}
+            />
+            <button
+              type="button" onClick={() => setVisible((v) => !v)}
+              aria-label={visible ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+              className="absolute end-3 top-1/2 -translate-y-1/2
+                text-stone-400 hover:text-stone-600 transition-colors"
+            >
+              {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="conf" className="block text-xs font-bold text-stone-600 mb-1.5">
+            {t('inscr.confirmer')}
+          </label>
+          <div className="relative">
+            <Lock size={16} className="absolute start-3.5 top-1/2
+              -translate-y-1/2 text-stone-400 pointer-events-none" />
+            <input
+              id="conf" type={visible ? 'text' : 'password'} value={confirmation}
+              autoComplete="new-password"
+              onChange={(e) => setConfirmation(e.target.value)}
+              placeholder="••••••••"
+              className={CHAMP_AUTH_ICONE}
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={envoi}
+          className="w-full py-3 rounded-xl text-white text-sm font-bold
+            flex items-center justify-center gap-2
+            bg-linear-to-r from-brand-500 to-violet-500
+            hover:brightness-110 active:brightness-95
+            disabled:opacity-60 disabled:cursor-not-allowed
+            transition-all shadow-lg shadow-brand-500/20"
+        >
+          {envoi ? t('inscr.enCours') : t('inscr.creer')}
+          {!envoi && <ArrowRight size={16} className="rtl:rotate-180" />}
+        </button>
+
+        <p className="text-[11px] text-stone-400 leading-relaxed text-center">
+          {t('inscr.note')}
+        </p>
+      </form>
+    </AuthLayout>
   );
 }

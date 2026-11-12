@@ -16,3 +16,19 @@ tmp/
 *.local
 .vscode/*
 !.vscode/extensions.json
+
+# Sauvegardes laissees par les scripts de migration
+*.bak
+*.avant-surface
+*.avant-renommage
+
+# Fichiers de travail
+pfe-rh-serverless/extrait*.txt
+pfe-rh-serverless/reponse.bin
+pfe-rh-serverless/site.json
+frontend/tsconfig.tsbuildinfo
+
+# Environnement local
+# .env.production reste suivi : le pipeline le reecrit a chaque build
+pfe-rh-serverless/.env.development
+.env.local

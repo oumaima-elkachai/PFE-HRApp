@@ -1,42 +1,67 @@
 // src/pages/employee/EmplDash.tsx
+//
+// Tableau de bord du salarié. C'est la première page qu'il ouvre le
+// matin, et c'est ce qui a guidé la refonte.
+//
+// L'ancienne version menait avec « assiduité », « retard cumulé » et
+// « absences » : trois indicateurs sur quatre rappelaient au salarié
+// ce qu'il avait mal fait. Les chiffres n'ont pas changé — ils sont
+// retournés. Le retard devient une ponctualité, et le détail en
+// minutes reste lisible dessous : on ne cache rien, on dit d'abord ce
+// qui va bien.
+//
+// Le pointage a été sorti dans components/pointage/ModalPointage :
+// il porte deux méthodes d'attestation — QR avec géolocalisation, et
+// reconnaissance faciale.
+//
+// Les deux méthodes ne prouvent pas la même chose : le QR atteste le
+// lieu, le visage atteste l'identité, et la géolocalisation est exigée
+// dans les deux cas. La reconnaissance faciale remplace donc le QR,
+// jamais la position.
 
 import { useState, useEffect } from 'react';
 import {
-  Clock, FileText, Calendar, Download, ArrowRight,
+  Clock, FileText, Calendar, Download, ArrowRight, Receipt,
   Award, TrendingUp, Plus, X, CheckCircle2, XCircle, Hourglass,
+  Video, Camera, ChevronRight, ScanFace,
+  Palmtree, Sparkles, Target, CalendarDays,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
+import { prechargerModeles } from '../../lib/visage';
 import { useAuth } from '../../context/AuthContext';
 import { pointagesService } from '../../services/pointages';
 import { facturesService } from '../../services/factures';
-import { calendrierService } from '../../services/calendrier';
 import { congesService, type Conge, type SoldeConges } from '../../services/conges';
 import { LIBELLES_TYPE_CONGE, LIBELLES_STATUT_CONGE, libelle } from '../../types/domaine';
 import type { StatutConge, TypeConge } from '../../types/domaine';
 import { employesService } from '../../services/employes';
 import api from '../../services/api';
+import ModalPointage from '@/components/pointages/ModalPointage';
+import BandeAcces from '../employee/BandeAcces';
 
-// ── Palette ────────────────────────────────────────────────────────
-const GREEN = '#2d6a4f';
-const INK = '#1a1a1a';
-const INK_SOFT = '#6b7280';
-const BORDER = '#e5e0d8';
-const BG_SOFT = '#f7f5f1';
+const FOND = 'transparent';
+
+// Le dégradé du bandeau est écrit en CSS plutôt qu'en classes : il
+// traverse ainsi les versions de Tailwind sans dépendre de la syntaxe
+// des utilitaires de dégradé, qui a changé entre la v3 et la v4.
+const DEGRADE_ACCUEIL = 'linear-gradient(135deg, #4F46E5 0%, #6366F1 55%, #818CF8 100%)';
 
 // Style uniquement : le vocabulaire métier vient de types/domaine.ts
 const STYLE_CONGE: Record<StatutConge, { bg: string; text: string; icon: any }> = {
-  EN_ATTENTE: { bg: '#fef3c7', text: '#b45309', icon: Hourglass },
-  APPROUVE:   { bg: '#d8f3dc', text: GREEN,     icon: CheckCircle2 },
-  REFUSE:     { bg: '#fee2e2', text: '#dc2626', icon: XCircle },
+  EN_ATTENTE: { bg: 'bg-amber-50',     text: 'text-amber-600', icon: Hourglass },
+  APPROUVE:   { bg: 'bg-brand-500/10', text: 'text-brand-texte', icon: CheckCircle2 },
+  REFUSE:     { bg: 'bg-red-50',       text: 'text-red-500',   icon: XCircle },
 };
 
-const STYLE_CONGE_DEFAUT = { bg: '#f3f4f6', text: '#6b7280', icon: Hourglass };
+const STYLE_CONGE_DEFAUT = { bg: 'bg-stone-100', text: 'text-stone-500', icon: Hourglass };
+
+const styleConge = (s: string) => STYLE_CONGE[s as StatutConge] ?? STYLE_CONGE_DEFAUT;
 
 /**
  * Date du jour au format AAAA-MM-JJ, dans le fuseau du navigateur.
- * toISOString() convertirait en UTC et décalerait d'un jour entre minuit
- * et 1 h du matin en Tunisie.
+ * toISOString() convertirait en UTC et décalerait d'un jour entre
+ * minuit et 1 h du matin en Tunisie.
  */
 function dateAujourdhui(): string {
   const d = new Date();
@@ -50,87 +75,403 @@ const heureCourte = (iso: string) =>
 const jourCourt = (d: string) =>
   new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 
+const tnd = (v: number) => `${v.toFixed(3)} TND`;
+
+/**
+ * Ancienneté en mois révolus.
+ *
+ * Une soustraction d'années donnerait « 1 an » dès le 1er janvier à un
+ * salarié embauché en décembre. Le mois et le jour doivent entrer dans
+ * le calcul.
+ */
+function anciennetteEnMois(dateEmbauche?: string): number {
+  if (!dateEmbauche) return 0;
+
+  const debut = new Date(dateEmbauche);
+  const maintenant = new Date();
+
+  let mois = (maintenant.getFullYear() - debut.getFullYear()) * 12
+    + (maintenant.getMonth() - debut.getMonth());
+
+  // Le mois n'est révolu que si le jour du mois est atteint
+  if (maintenant.getDate() < debut.getDate()) mois -= 1;
+
+  return Math.max(0, mois);
+}
+
+function formaterAnciennete(mois: number): string {
+  if (mois < 1) return 'Arrivé ce mois-ci';
+  if (mois < 12) return `${mois} mois`;
+
+  const annees = Math.floor(mois / 12);
+  const reste = mois % 12;
+
+  if (reste === 0) return `${annees} an${annees > 1 ? 's' : ''}`;
+  return `${annees} an${annees > 1 ? 's' : ''} et ${reste} mois`;
+}
+
+/**
+ * Anniversaire d'embauche tombant dans le mois en cours.
+ *
+ * Ne se déclenche qu'à partir d'un an révolu : souhaiter un
+ * anniversaire à quelqu'un arrivé le mois dernier sonnerait faux.
+ *
+ * `passe` distingue les deux cas, parce que la date compte. Au 3
+ * novembre, quelqu'un embauché le 15 novembre 2023 totalise deux ans
+ * et onze mois — annoncer « 3 ans ce mois-ci » à côté de ce chiffre
+ * ressemble à une incohérence alors que les deux sont exacts. On dit
+ * donc le jour.
+ */
+function anniversaireDuMois(dateEmbauche?: string):
+  { annees: number; jour: number; passe: boolean } | null {
+  if (!dateEmbauche) return null;
+
+  const debut = new Date(dateEmbauche);
+  const maintenant = new Date();
+  if (debut.getMonth() !== maintenant.getMonth()) return null;
+
+  const annees = maintenant.getFullYear() - debut.getFullYear();
+  if (annees < 1) return null;
+
+  return {
+    annees,
+    jour: debut.getDate(),
+    passe: maintenant.getDate() >= debut.getDate(),
+  };
+}
+
+const MOIS_LONGS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+  'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+
 // ── Composants partagés ────────────────────────────────────────────
-function Section({ title, icon: Icon, action, children }: {
-  title: string;
-  icon: React.ComponentType<{ className?: string }>;
+function Vide({ icone: Icone, texte, action }: {
+  icone: React.ComponentType<{ className?: string }>;
+  texte: string;
   action?: React.ReactNode;
-  children: React.ReactNode;
 }) {
   return (
-    <div className="bg-white border rounded-2xl p-6" style={{ borderColor: BORDER }}>
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="font-semibold flex items-center gap-2 text-[15px]" style={{ color: INK }}>
-          {Icon && <Icon className="w-4 h-4" />}
-          {title}
-        </h2>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function EmptyState({ emoji, text }: { emoji: string; text: string }) {
-  return (
     <div className="text-center py-10">
-      <div className="text-3xl mb-2 opacity-60">{emoji}</div>
-      <p className="text-sm" style={{ color: INK_SOFT }}>{text}</p>
+      <div className="w-12 h-12 rounded-2xl bg-stone-50 flex items-center justify-center mx-auto mb-3">
+        <Icone className="w-5 h-5 text-stone-300" />
+      </div>
+      <p className="text-sm text-stone-500">{texte}</p>
+      {action && <div className="mt-4">{action}</div>}
     </div>
   );
 }
 
-function Skeleton({ count = 3, h = 'h-14' }: { count?: number; h?: string }) {
+function Squelette({ nb = 3, h = 'h-14' }: { nb?: number; h?: string }) {
   return (
     <div className="space-y-2.5">
-      {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className={`${h} rounded-xl animate-pulse`} style={{ backgroundColor: BG_SOFT }} />
+      {Array.from({ length: nb }).map((_, i) => (
+        <div key={i} className={`${h} rounded-xl bg-stone-50 animate-pulse`} />
       ))}
     </div>
   );
 }
 
-function Badge({ icon: Icon, label, achieved }: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  achieved: boolean;
+function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3500);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  return (
+    // Sur téléphone le bandeau prend la largeur : une bulle de 280
+    // pixels calée à droite déborderait d'un écran de 360.
+    <div className="fixed top-4 start-4 end-4 sm:start-auto sm:top-6 sm:end-6 z-70">
+      <div className="bg-brand-500 text-white rounded-xl px-5 py-3 shadow-lg flex items-center gap-3 sm:min-w-70">
+        <CheckCircle2 className="w-5 h-5 shrink-0" />
+        <p className="text-sm font-medium flex-1">{message}</p>
+        <button onClick={onClose} className="text-white/70 hover:text-white shrink-0">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Animation ──────────────────────────────────────────────────────
+//
+// Tout est en CSS et en requestAnimationFrame : aucune bibliothèque
+// d'animation n'est ajoutée. Une dépendance de plus la veille d'une
+// soutenance est un risque que le mouvement ne justifie pas.
+//
+// Chaque effet respecte prefers-reduced-motion. Ce n'est pas une
+// politesse : un tableau de bord qui s'anime sans condition est
+// inutilisable pour une personne sujette au mal des transports, et
+// c'est un critère d'accessibilité vérifiable.
+
+const STYLES_ANIMATION = `
+@keyframes hrup-monter {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+.hrup-monter {
+  animation: hrup-monter 520ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+.hrup-carte {
+  transition: transform 220ms ease, box-shadow 220ms ease;
+}
+.hrup-carte:hover {
+  transform: translateY(-2px);
+}
+@keyframes hrup-trace {
+  from { stroke-dashoffset: var(--depart); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hrup-monter { animation: none; }
+  .hrup-carte  { transition: none; }
+  .hrup-carte:hover { transform: none; }
+}
+`;
+
+/** Vrai quand le système demande à limiter les animations. */
+function mouvementReduit(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/**
+ * Compteur animé de 0 à la cible.
+ *
+ * La courbe est un amorti cubique : le chiffre part vite puis ralentit,
+ * ce qui le rend lisible avant la fin de l'animation. Une progression
+ * linéaire donne l'impression d'un chargement, pas d'un compteur.
+ */
+function useCompteur(cible: number, duree = 900): number {
+  const [valeur, setValeur] = useState(0);
+
+  useEffect(() => {
+    if (!Number.isFinite(cible)) { setValeur(0); return; }
+    if (mouvementReduit()) { setValeur(cible); return; }
+
+    let image = 0;
+    const depart = performance.now();
+
+    const pas = (t: number) => {
+      const avancement = Math.min(1, (t - depart) / duree);
+      setValeur(cible * (1 - (1 - avancement) ** 3));
+      if (avancement < 1) image = requestAnimationFrame(pas);
+    };
+
+    image = requestAnimationFrame(pas);
+    return () => cancelAnimationFrame(image);
+  }, [cible, duree]);
+
+  return valeur;
+}
+
+/** Entrée décalée : chaque bloc arrive un peu après le précédent. */
+function Apparition({ delai = 0, className = '', children }: {
+  delai?: number;
+  className?: string;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3 py-2">
-      <div
-        className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-        style={{ backgroundColor: achieved ? GREEN : '#e5e5e5' }}
-      >
-        <Icon className="w-4 h-4 text-white" />
-      </div>
-      <span className="text-sm" style={{ color: achieved ? INK : '#9ca3af' }}>{label}</span>
-      {achieved && <CheckCircle2 className="w-4 h-4 ml-auto" style={{ color: GREEN }} />}
+    <div className={`hrup-monter ${className}`} style={{ animationDelay: `${delai}ms` }}>
+      {children}
     </div>
   );
 }
 
-function ProgressBar({ label, value, suffix = '%' }: { label: string; value: number; suffix?: string }) {
-  const pct = Math.max(0, Math.min(100, value));
+/**
+ * Courbe d'évolution, sans axes ni graduations.
+ *
+ * Elle ne sert pas à lire une valeur — les montants sont écrits en
+ * toutes lettres à côté — mais à voir une tendance d'un coup d'œil.
+ */
+function Courbe({ valeurs, couleur = '#4F46E5', largeur = 120, hauteur = 36 }: {
+  valeurs: number[];
+  couleur?: string;
+  largeur?: number;
+  hauteur?: number;
+}) {
+  if (valeurs.length < 2) return null;
+
+  const min = Math.min(...valeurs);
+  const max = Math.max(...valeurs);
+  // Un salaire constant donnerait une division par zéro : la courbe
+  // devient alors une ligne plate au milieu, ce qui est exact.
+  const etendue = max - min || 1;
+
+  const points = valeurs.map((v, i) => {
+    const x = (i / (valeurs.length - 1)) * largeur;
+    const y = hauteur - ((v - min) / etendue) * (hauteur - 6) - 3;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  return (
+    <svg width={largeur} height={hauteur} className="shrink-0 overflow-visible">
+      <polyline
+        points={points.join(' ')}
+        fill="none" stroke={couleur} strokeWidth={2}
+        strokeLinecap="round" strokeLinejoin="round"
+        opacity={0.35}
+      />
+      <circle
+        cx={largeur} cy={points[points.length - 1].split(',')[1]}
+        r={3} fill={couleur}
+      />
+    </svg>
+  );
+}
+
+/**
+ * Barre empilée du solde de congés.
+ *
+ * Trois quantités qui s'additionnent jusqu'au total : une barre
+ * empilée les montre d'un seul regard là où trois chiffres demandent
+ * une soustraction mentale.
+ */
+function BarreConges({ pris, enAttente, total }: {
+  pris: number;
+  enAttente: number;
+  total: number;
+}) {
+  const base = total || 1;
+  const partPris = Math.min(100, (pris / base) * 100);
+  const partAttente = Math.min(100 - partPris, (enAttente / base) * 100);
+
   return (
     <div>
-      <div className="flex justify-between items-center mb-1.5">
-        <span className="text-sm" style={{ color: INK_SOFT }}>{label}</span>
-        <span className="text-sm font-semibold" style={{ color: GREEN }}>
-          {Math.round(value)}{suffix}
-        </span>
-      </div>
-      <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ backgroundColor: BG_SOFT }}>
+      <div className="h-2.5 w-full rounded-full overflow-hidden bg-stone-100 flex">
         <div
-          className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${pct}%`, backgroundColor: GREEN }}
+          className="h-full bg-brand-500"
+          style={{ width: `${partPris}%`, transition: 'width 900ms ease-out' }}
         />
+        <div
+          className="h-full bg-amber-400"
+          style={{ width: `${partAttente}%`, transition: 'width 900ms ease-out' }}
+        />
+      </div>
+
+      {/* « Disponibles » et non « restants » : le solde restant annoncé
+          par le serveur inclut les jours en attente de validation. Si
+          la légende disait « restants » ici, elle contredirait le grand
+          chiffre juste au-dessus alors que les deux sont justes. */}
+      <div className="flex items-center gap-4 mt-2.5 flex-wrap">
+        {([
+          ['bg-brand-500', `${pris} pris`],
+          ...(enAttente > 0 ? [['bg-amber-400', `${enAttente} en attente`]] : []),
+          ['bg-stone-200', `${Math.max(0, total - pris - enAttente)} disponibles`],
+        ] as [string, string][]).map(([pastille, texte]) => (
+          <span key={texte} className="flex items-center gap-1.5 text-[10px] text-stone-500">
+            <span className={`w-2 h-2 rounded-full ${pastille}`} />
+            {texte}
+          </span>
+        ))}
       </div>
     </div>
   );
 }
 
-// ── Modale de demande ──────────────────────────────────────────────
-function ModalDemandeConge({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+/**
+ * Anneau de progression.
+ *
+ * Une barre horizontale se lit de gauche à droite, donc en séquence ;
+ * un anneau se saisit d'un coup d'œil, et trois anneaux côte à côte se
+ * comparent sans les lire. Le chiffre reste au centre : une forme sans
+ * valeur ne se défend pas devant un jury.
+ *
+ * Le tracé part de zéro au montage, sinon l'anneau apparaît déjà plein
+ * et la transition CSS n'a rien à animer.
+ */
+function Anneau({ valeur, affichage, couleur, taille = 92, epaisseur = 8 }: {
+  valeur: number;
+  affichage: string;
+  couleur: string;
+  taille?: number;
+  epaisseur?: number;
+}) {
+  const anime = useCompteur(valeur, 1000);
+
+  const rayon = (taille - epaisseur) / 2;
+  const circonference = 2 * Math.PI * rayon;
+  const borne = Math.max(0, Math.min(100, anime));
+  const reste = circonference * (1 - borne / 100);
+
+  return (
+    <div className="relative shrink-0" style={{ width: taille, height: taille }}>
+      <svg width={taille} height={taille} className="-rotate-90">
+        <circle
+          cx={taille / 2} cy={taille / 2} r={rayon}
+          fill="none" stroke="#F5F5F4" strokeWidth={epaisseur}
+        />
+        <circle
+          cx={taille / 2} cy={taille / 2} r={rayon}
+          fill="none" stroke={couleur} strokeWidth={epaisseur}
+          strokeLinecap="round"
+          strokeDasharray={circonference}
+          strokeDashoffset={reste}
+        />
+      </svg>
+
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="text-lg font-bold text-stone-800">{affichage}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Carte d'indicateur en anneau.
+ *
+ * `detail` porte le chiffre brut — les minutes de retard, les jours
+ * travaillés. Le pourcentage encourage, le détail reste vérifiable.
+ */
+function CarteAnneau({ icone: Icone, titre, valeur, affichage, detail, couleur, alerte, delai = 0 }: {
+  icone: React.ComponentType<{ className?: string }>;
+  titre: string;
+  valeur: number;
+  affichage: string;
+  detail?: string;
+  couleur: string;
+  alerte?: boolean;
+  delai?: number;
+}) {
+  return (
+    <div
+      style={{ animationDelay: `${delai}ms` }}
+      className={`hrup-monter hrup-carte bg-surface rounded-2xl shadow-sm border p-5 flex items-center gap-4 ${
+        alerte ? 'border-amber-200' : 'border-stone-100'
+      }`}
+    >
+      <Anneau valeur={valeur} affichage={affichage} couleur={couleur} />
+
+      <div className="min-w-0">
+        <div className="flex items-center gap-1.5">
+          <Icone className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+          <span className="text-xs font-bold text-stone-700">{titre}</span>
+        </div>
+        {detail && (
+          <p className="text-[11px] text-stone-400 mt-1 leading-relaxed">{detail}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Chiffre du bandeau d'accueil, sur fond coloré. */
+function ChiffreAccueil({ icone: Icone, valeur, libelle: texte }: {
+  icone: React.ComponentType<{ className?: string }>;
+  valeur: string | number;
+  libelle: string;
+}) {
+  return (
+    <div className="rounded-xl px-4 py-3 bg-white/15 backdrop-blur-sm min-w-[7.5rem]">
+      <Icone className="w-4 h-4 text-white/70 mb-1.5" />
+      <div className="text-xl font-bold text-white leading-none">{valeur}</div>
+      <div className="text-[10px] text-white/70 mt-1">{texte}</div>
+    </div>
+  );
+}
+
+// ── Demande de congé ───────────────────────────────────────────────
+function ModalDemandeConge({ onClose, onSuccess }: {
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
   const [form, setForm] = useState<{
     type: TypeConge;
     dateDebut: string;
@@ -138,7 +479,7 @@ function ModalDemandeConge({ onClose, onSuccess }: { onClose: () => void; onSucc
     motif: string;
   }>({ type: 'annuel', dateDebut: '', dateFin: '', motif: '' });
 
-  const [loading, setLoading] = useState(false);
+  const [envoi, setEnvoi] = useState(false);
   const [erreur, setErreur] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -154,7 +495,7 @@ function ModalDemandeConge({ onClose, onSuccess }: { onClose: () => void; onSucc
       return;
     }
 
-    setLoading(true);
+    setEnvoi(true);
     setErreur('');
     try {
       await congesService.demander(form);
@@ -162,41 +503,40 @@ function ModalDemandeConge({ onClose, onSuccess }: { onClose: () => void; onSucc
       onClose();
     } catch (err: any) {
       setErreur(err?.erreur || err?.message || 'Erreur lors de la demande');
-    } finally {
-      setLoading(false);
+      setEnvoi(false);
     }
   };
 
-  const inputCls = 'w-full px-3 py-2.5 text-sm rounded-xl border focus:outline-none focus:ring-1';
+  const champ =
+    'w-full px-3 py-2.5 text-sm bg-stone-50 border border-stone-200 rounded-xl focus:outline-none focus:border-brand-500 transition-colors';
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
-        <div className="flex items-center justify-between p-6 border-b" style={{ borderColor: BORDER }}>
-          <h2 className="font-semibold text-lg" style={{ color: INK }}>Demander un congé</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-50 rounded-xl">
-            <X className="w-5 h-5" style={{ color: INK_SOFT }} />
+    <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-xl max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 sm:p-6 border-b border-stone-200 sticky top-0 bg-surface rounded-t-2xl">
+          <h2 className="font-bold text-lg text-stone-800">Demander un congé</h2>
+          <button onClick={onClose} className="p-2 hover:bg-stone-50 rounded-xl transition-colors">
+            <X className="w-5 h-5 text-stone-500" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4">
           {erreur && (
-            <div className="text-sm rounded-xl px-4 py-3" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>
+            <div className="text-sm rounded-xl px-4 py-3 bg-red-50 text-red-600">
               {erreur}
             </div>
           )}
 
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: INK_SOFT }}>
+            <label className="block text-xs font-medium text-stone-500 mb-1.5">
               Type de congé
             </label>
             <select
               value={form.type}
-              onChange={e => setForm({ ...form, type: e.target.value as TypeConge })}
-              className={inputCls}
-              style={{ borderColor: BORDER, backgroundColor: BG_SOFT }}
+              onChange={(e) => setForm({ ...form, type: e.target.value as TypeConge })}
+              className={champ}
             >
-              {(Object.keys(LIBELLES_TYPE_CONGE) as TypeConge[]).map(t => (
+              {(Object.keys(LIBELLES_TYPE_CONGE) as TypeConge[]).map((t) => (
                 <option key={t} value={t}>{LIBELLES_TYPE_CONGE[t]}</option>
               ))}
             </select>
@@ -204,57 +544,52 @@ function ModalDemandeConge({ onClose, onSuccess }: { onClose: () => void; onSucc
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: INK_SOFT }}>Du</label>
+              <label className="block text-xs font-medium text-stone-500 mb-1.5">Du</label>
               <input
                 type="date"
                 value={form.dateDebut}
-                onChange={e => setForm({ ...form, dateDebut: e.target.value })}
-                className={inputCls}
-                style={{ borderColor: BORDER, backgroundColor: BG_SOFT }}
+                onChange={(e) => setForm({ ...form, dateDebut: e.target.value })}
+                className={champ}
               />
             </div>
             <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: INK_SOFT }}>Au</label>
+              <label className="block text-xs font-medium text-stone-500 mb-1.5">Au</label>
               <input
                 type="date"
                 value={form.dateFin}
                 min={form.dateDebut || undefined}
-                onChange={e => setForm({ ...form, dateFin: e.target.value })}
-                className={inputCls}
-                style={{ borderColor: BORDER, backgroundColor: BG_SOFT }}
+                onChange={(e) => setForm({ ...form, dateFin: e.target.value })}
+                className={champ}
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: INK_SOFT }}>
+            <label className="block text-xs font-medium text-stone-500 mb-1.5">
               Motif (optionnel)
             </label>
             <textarea
               value={form.motif}
-              onChange={e => setForm({ ...form, motif: e.target.value })}
+              onChange={(e) => setForm({ ...form, motif: e.target.value })}
               rows={3}
-              className={`${inputCls} resize-none`}
-              style={{ borderColor: BORDER, backgroundColor: BG_SOFT }}
+              className={`${champ} resize-none`}
             />
           </div>
 
-          <div className="flex gap-3 pt-1">
+          <div className="flex flex-col sm:flex-row gap-3 pt-1">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 border rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50 transition-colors"
-              style={{ borderColor: BORDER, color: INK }}
+              className="flex-1 border border-stone-200 rounded-xl py-2.5 text-sm font-medium text-stone-600 hover:bg-stone-50 transition-colors"
             >
               Annuler
             </button>
             <button
               type="submit"
-              disabled={loading}
-              className="flex-1 text-white rounded-xl py-2.5 text-sm font-semibold transition-opacity disabled:opacity-60 hover:opacity-90 flex items-center justify-center gap-2"
-              style={{ backgroundColor: GREEN }}
+              disabled={envoi}
+              className="flex-1 bg-brand-500 hover:bg-brand-600 text-white rounded-xl py-2.5 text-sm font-bold transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
             >
-              {loading
+              {envoi
                 ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 : 'Envoyer'}
             </button>
@@ -276,16 +611,17 @@ export default function EmployeeDashboard() {
   const [evenements, setEvenements] = useState<any[]>([]);
   const [conges, setConges] = useState<Conge[]>([]);
   const [solde, setSolde] = useState<SoldeConges | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [ptLoading, setPtLoading] = useState(false);
-  const [flash, setFlash] = useState('');
-  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [frais, setFrais] = useState<{ aRembourser: number; enAttente: number } | null>(null);
+  const [chargement, setChargement] = useState(true);
+  const [toast, setToast] = useState('');
+  const [modalConge, setModalConge] = useState(false);
+  const [modalPointage, setModalPointage] = useState(false);
   const [ficheEmploye, setFicheEmploye] = useState<any>(null);
 
-  const montrerFlash = (msg: string) => {
-    setFlash(msg);
-    setTimeout(() => setFlash(''), 3000);
-  };
+  // Enrôlement facial : conditionne le choix de méthode proposé au
+  // pointage. Un salarié non enrôlé ne doit pas voir une option qui
+  // échouerait.
+  const [facialDisponible, setFacialDisponible] = useState(false);
 
   const chargerConges = async () => {
     try {
@@ -297,29 +633,59 @@ export default function EmployeeDashboard() {
     }
   };
 
+  const chargerPointage = async () => {
+    try {
+      const res = await pointagesService.historique({ date: dateAujourdhui() }) as any;
+      const enCours = (res?.data?.pointages ?? []).find((p: any) => p.statut === 'EN_COURS');
+      setPointageActif(Boolean(enCours));
+      setHeureArrivee(enCours ? heureCourte(enCours.heureArrivee) : null);
+    } catch (e) {
+      console.error('Chargement du pointage :', e);
+    }
+  };
+
   useEffect(() => {
-    const charger = async () => {
+    (async () => {
       try {
-          const [facRes, evRes, ptRes, congesRes, ficheRes] = await Promise.all([
+        // allSettled plutôt que all : une route en échec ne doit pas
+        // vider tout le tableau de bord.
+        const [
+          facRes, evRes, ptRes, congesRes, fraisRes, ficheRes, bioRes,
+        ] = await Promise.allSettled([
           facturesService.lister() as any,
-          calendrierService.lister() as any,
+          api.get('/evenements') as any,
           pointagesService.historique({ date: dateAujourdhui() }) as any,
           congesService.lister(),
+          api.get('/frais/notes') as any,
           user?.employeId
-            ? (employesService.detail(user.employeId) as any).catch(() => null)
+            ? (employesService.detail(user.employeId) as any)
             : Promise.resolve(null),
+          api.get('/biometrie/etat') as any,
         ]);
 
-        setFicheEmploye(ficheRes?.data?.employe ?? null);
+        const valeur = (r: PromiseSettledResult<any>) =>
+          r.status === 'fulfilled' ? r.value : null;
 
-        // Le serveur filtre déjà sur le compte connecté : re-filtrer ici
-        // comparerait à un identifiant différent et viderait la liste.
-        setFactures((facRes?.data?.factures ?? []).slice(0, 5));
-        setEvenements((evRes?.data?.evenements ?? []).slice(0, 4));
-        setConges(congesRes?.data?.conges ?? []);
-        setSolde(congesRes?.data?.solde ?? null);
+        setFicheEmploye(valeur(ficheRes)?.data?.employe ?? null);
 
-        const enCours = (ptRes?.data?.pointages ?? []).find((p: any) => p.statut === 'EN_COURS');
+        // Un échec de lecture retombe sur false : le salarié pointera
+        // par QR, ce qui est le repli correct.
+        setFacialDisponible(Boolean(valeur(bioRes)?.data?.enrole));
+
+        // Le tri est explicite : factures[0] doit être le bulletin le
+        // plus récent, sans quoi tous les indicateurs porteraient sur
+        // une période arbitraire.
+        const liste = (valeur(facRes)?.data?.factures ?? [])
+          .sort((a: any, b: any) => String(b.periode).localeCompare(String(a.periode)));
+        setFactures(liste.slice(0, 5));
+
+        setEvenements((valeur(evRes)?.data?.evenements ?? []).slice(0, 4));
+        setConges(valeur(congesRes)?.data?.conges ?? []);
+        setSolde(valeur(congesRes)?.data?.solde ?? null);
+        setFrais(valeur(fraisRes)?.data?.resume ?? null);
+
+        const enCours = (valeur(ptRes)?.data?.pointages ?? [])
+          .find((p: any) => p.statut === 'EN_COURS');
         if (enCours) {
           setPointageActif(true);
           setHeureArrivee(heureCourte(enCours.heureArrivee));
@@ -327,293 +693,688 @@ export default function EmployeeDashboard() {
       } catch (e) {
         console.error('Chargement du tableau de bord :', e);
       } finally {
-        setLoading(false);
+        setChargement(false);
       }
-    };
-    charger();
-  }, [user?.sub]);
+    })();
+    // employeId conditionne le chargement de la fiche : sans lui dans
+    // les dépendances, l'ancienneté resterait vide s'il arrive après.
+  }, [user?.sub, user?.employeId]);
 
-  const handlePointage = async () => {
-    setPtLoading(true);
-    try {
-      if (!pointageActif) {
-        await pointagesService.arrivee();
-        setPointageActif(true);
-        setHeureArrivee(heureCourte(new Date().toISOString()));
-        montrerFlash('Arrivée enregistrée');
-      } else {
-        await pointagesService.depart();
-        setPointageActif(false);
-        setHeureArrivee(null);
-        montrerFlash('Départ enregistré');
-      }
-    } catch (e: any) {
-      montrerFlash(e?.erreur || 'Erreur lors du pointage');
-    } finally {
-      setPtLoading(false);
-    }
-  };
+  // Le modèle de reconnaissance faciale se charge en avance de phase,
+  // pendant que le salarié lit son tableau de bord. Sans cela, les
+  // 6,8 Mo de poids et la compilation des noyaux de calcul se paient
+  // après le clic sur « pointer », là où l'attente se remarque.
+  //
+  // Conditionné à l'enrôlement : un salarié qui pointe par QR n'a
+  // aucune raison de télécharger un modèle qu'il n'utilisera pas.
+  useEffect(() => {
+    if (facialDisponible) prechargerModeles();
+  }, [facialDisponible]);
 
   const heure = new Date().getHours();
   const salutation = heure < 12 ? 'Bonjour' : heure < 18 ? 'Bon après-midi' : 'Bonsoir';
 
-  // ── Indicateurs, calculés sur le dernier bulletin ────────────────
+  // ── Indicateurs ──
   const derniereFacture = factures[0];
-  const nbOuvrables   = derniereFacture?.nbJoursOuvrables ?? derniereFacture?.nbOuvrables ?? 0;
+  const nbOuvrables   = derniereFacture?.nbJoursOuvrables ?? 0;
   const joursPresents = derniereFacture?.joursPresents ?? 0;
   const joursAbsents  = derniereFacture?.joursAbsents ?? 0;
-  const retardMin     = derniereFacture?.minutesRetard ?? derniereFacture?.totalRetardMin ?? 0;
+  const retardMin     = derniereFacture?.minutesRetard ?? 0;
 
-  const tauxAssiduite   = nbOuvrables > 0 ? (joursPresents / nbOuvrables) * 100 : 0;
-  const tauxPonctualite = Math.max(0, 100 - retardMin / 2);
+  const tauxAssiduite = nbOuvrables > 0 ? (joursPresents / nbOuvrables) * 100 : 0;
 
-  const anneeEmbauche = ficheEmploye?.dateEmbauche
-    ? new Date(ficheEmploye.dateEmbauche).getFullYear()
-    : new Date().getFullYear();
-  const anciennete = new Date().getFullYear() - anneeEmbauche;
-  const anciennetePct = Math.min(100, (anciennete / 3) * 100);
+  // La ponctualité se mesure en retard moyen par jour travaillé, et
+  // non par une décote arbitraire du total. Un seuil de 15 minutes
+  // correspond à la tolérance appliquée au pointage.
+  const retardMoyen = joursPresents > 0 ? retardMin / joursPresents : 0;
+  const tauxPonctualite = Math.max(0, 100 - (retardMoyen / 15) * 100);
 
-  const badges = [
-    { icon: CheckCircle2, label: `Assidu — ${Math.round(tauxAssiduite)} % de présence`, achieved: tauxAssiduite >= 90 },
-    { icon: Clock,        label: `Ponctuel — ${retardMin} min de retard cumulé`,        achieved: retardMin < 30 },
-    { icon: Award,        label: 'Aucune absence ce mois-ci',                           achieved: joursAbsents === 0 && !!derniereFacture },
-    { icon: TrendingUp,   label: `${anciennete} an(s) d'ancienneté`,                    achieved: anciennete >= 1 },
-  ];
+  const moisAnciennete = anciennetteEnMois(ficheEmploye?.dateEmbauche);
+  const anniversaire = anniversaireDuMois(ficheEmploye?.dateEmbauche);
+
+  const partConges = solde && solde.total > 0
+    ? (solde.restants / solde.total) * 100
+    : 0;
+
+  // ── Ce qui vient ──
+  //
+  // Congés et événements dans une seule file, triée par date. Deux
+  // cartes séparées obligeaient à comparer soi-même « mon congé du 9 »
+  // et « la formation du 12 » pour savoir ce qui arrive en premier.
+  const maintenant = Date.now();
+
+  type Echeance = {
+    id: string;
+    genre: 'conge' | 'evenement';
+    titre: string;
+    detail: string;
+    debut: string;
+    route: string;
+    inscrit?: boolean;
+    visio?: boolean;
+  };
+
+  const prochaines: Echeance[] = [
+    ...conges
+      .filter((c) => c.statut === 'APPROUVE'
+        && new Date(c.dateDebut).getTime() >= maintenant)
+      .map((c): Echeance => ({
+        id: `conge-${c.id}`,
+        genre: 'conge',
+        titre: libelle(LIBELLES_TYPE_CONGE, c.type),
+        detail: `${jourCourt(c.dateDebut)} → ${jourCourt(c.dateFin)}`
+          + ` · ${c.nbJours} jour${c.nbJours > 1 ? 's' : ''}`,
+        debut: c.dateDebut,
+        route: '/employe/agenda',
+      })),
+    ...evenements
+      .filter((e: any) => e.dateDebut && new Date(e.dateDebut).getTime() >= maintenant)
+      .map((e: any): Echeance => ({
+        id: `evenement-${e.id}`,
+        genre: 'evenement',
+        titre: e.titre,
+        detail: new Date(e.dateDebut).toLocaleDateString('fr-FR', {
+          day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+        }) + (e.lieu ? ` · ${e.lieu}` : ''),
+        debut: e.dateDebut,
+        route: '/evenements',
+        inscrit: Boolean(e.inscrit),
+        visio: Boolean(e.lienVisio),
+      })),
+  ]
+    .sort((a, b) => String(a.debut).localeCompare(String(b.debut)))
+    .slice(0, 4);
+
+  // Évolution du net sur les derniers bulletins. `factures` est trié du
+  // plus récent au plus ancien : la courbe se lit dans l'autre sens.
+  const courbeNet = [...factures]
+    .reverse()
+    .map((f: any) => Number(f.salaireNet))
+    .filter((v) => Number.isFinite(v));
+
+  const netAnime = useCompteur(Number(derniereFacture?.salaireNet) || 0, 1100);
+
+  // ── Distinctions ──
+  // Uniquement sur des faits vérifiables. Un encouragement inventé se
+  // repère immédiatement et décrédibilise le reste de la page.
+  const distinctions: { icone: any; texte: string }[] = [];
+
+  if (anniversaire) {
+    const duree = `${anniversaire.annees} an${anniversaire.annees > 1 ? 's' : ''}`;
+    distinctions.push({
+      icone: Sparkles,
+      texte: anniversaire.passe
+        ? `${duree} dans l'entreprise, depuis le ${anniversaire.jour} ${MOIS_LONGS[new Date().getMonth()]}`
+        : `Bientôt ${duree} dans l'entreprise, le ${anniversaire.jour} ${MOIS_LONGS[new Date().getMonth()]}`,
+    });
+  }
+  if (derniereFacture && joursAbsents === 0) {
+    distinctions.push({
+      icone: Award,
+      texte: `${derniereFacture.moisLabel} sans aucune absence`,
+    });
+  }
+  if (derniereFacture && retardMin === 0 && joursPresents > 0) {
+    distinctions.push({
+      icone: Target,
+      texte: 'Aucun retard ce mois-ci',
+    });
+  }
 
   return (
-    <Layout>
-      <div className="max-w-4xl mx-auto">
-        {flash && (
+    <div className="min-h-screen" style={{ backgroundColor: FOND }}>
+      <Layout>
+
+        <div className="px-4 sm:px-8 py-5 sm:py-6 space-y-4">
+
+          {/* ── Bandeau d'accueil ── */}
+          {/* Le bouton d'ouverture du tiroir est posé en superposition
+              en haut à gauche sous lg : le contenu décale d'autant. */}
           <div
-            className="fixed top-20 right-6 z-50 text-white px-4 py-2.5 rounded-xl shadow-lg text-sm"
-            style={{ backgroundColor: GREEN }}
+            className="hrup-monter rounded-2xl shadow-sm overflow-hidden"
+            style={{ background: DEGRADE_ACCUEIL }}
           >
-            {flash}
-          </div>
-        )}
+            <div className="px-5 sm:px-7 py-6 sm:py-7 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
 
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-semibold" style={{ color: INK }}>
-              {salutation}, {user?.prenom}
-            </h1>
-            <p className="text-sm mt-0.5" style={{ color: INK_SOFT }}>
-              {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </p>
-          </div>
+              <div className="min-w-0">
+                {/* Seuls le fil d'Ariane et le titre se décalent : le
+                    bouton d'ouverture du tiroir est posé en
+                    superposition à cet endroit précis, sous lg. Décaler
+                    tout le bloc désalignerait les boutons et les
+                    chiffres, qui n'ont rien sous eux. */}
+                <div className="ps-12 lg:ps-0">
+                  <nav className="flex text-[11px] text-white/60 mb-2 gap-2 items-center">
+                    <span>Mon espace</span>
+                    <ChevronRight className="w-3 h-3" />
+                    <span className="text-white/90 font-semibold">Tableau de bord</span>
+                  </nav>
 
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5 text-sm" style={{ color: INK_SOFT }}>
-              <span
-                className="w-1.5 h-1.5 rounded-full"
-                style={{ backgroundColor: pointageActif ? GREEN : '#d1d5db' }}
-              />
-              {pointageActif ? `En service depuis ${heureArrivee}` : 'Hors service'}
-            </span>
-            <button
-              onClick={handlePointage}
-              disabled={ptLoading}
-              className="text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-60"
-              style={{ backgroundColor: pointageActif ? '#dc2626' : GREEN }}
-            >
-              {ptLoading
-                ? <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                : <Clock className="w-3.5 h-3.5" />}
-              {pointageActif ? 'Départ' : 'Arrivée'}
-            </button>
-          </div>
-        </div>
+                  <h2 className="text-2xl sm:text-3xl font-bold text-white">
+                    {salutation}{user?.prenom && `, ${user.prenom}`}
+                  </h2>
 
-        <div className="space-y-5">
-          <Section
-            title="Mes fiches de paie"
-            icon={FileText}
-            action={factures.length > 0 && (
-              <button
-                onClick={() => navigate('/employe/factures')}
-                className="flex items-center gap-1 text-xs font-medium hover:underline"
-                style={{ color: GREEN }}
-              >
-                Voir tout <ArrowRight className="w-3 h-3" />
-              </button>
-            )}
-          >
-            {loading ? <Skeleton count={3} /> : factures.length === 0 ? (
-              <EmptyState emoji="📄" text="Aucune fiche de paie disponible" />
-            ) : (
-              <div className="divide-y" style={{ borderColor: BORDER }}>
-                {factures.map((f: any) => (
-                  <div key={f.id} className="flex items-center justify-between py-3">
-                    <div>
-                      <div className="text-sm font-medium" style={{ color: INK }}>{f.moisLabel}</div>
-                      <div className="text-xs font-mono" style={{ color: INK_SOFT }}>{f.numero}</div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-semibold text-sm" style={{ color: GREEN }}>
-                        {f.salaireNet?.toFixed(3)} TND
-                      </span>
-                      {/* Le PDF vit sur S3 (ou sur disque en local) : on passe
-                          par l'API plutôt que par un base64 embarqué */}
-                                            {f.pdfKey && (
-                        <button
-                          onClick={async () => {
-                            try {
-                              const blob = await api.get(
-                                `/factures/pdf/${encodeURIComponent(f.id)}`,
-                                { responseType: 'blob' }
-                              ) as unknown as Blob;
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              a.href = url;
-                              a.download = `${f.numero}.pdf`;
-                              a.click();
-                              setTimeout(() => URL.revokeObjectURL(url), 5000);
-                            } catch {
-                              montrerFlash('Bulletin indisponible');
-                            }
-                          }}
-                          className="p-1.5 hover:bg-gray-50 rounded-lg"
-                          title="Télécharger le bulletin"
-                        >
-                          <Download className="w-3.5 h-3.5" style={{ color: GREEN }} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Section>
-
-          <div className="grid grid-cols-2 gap-5">
-            <Section title="Ma progression" icon={TrendingUp}>
-              {loading ? <Skeleton count={3} h="h-6" /> : !derniereFacture ? (
-                <EmptyState emoji="📊" text="Pas encore de données ce mois-ci" />
-              ) : (
-                <div className="space-y-4">
-                  <ProgressBar label="Assiduité" value={tauxAssiduite} />
-                  <ProgressBar label="Ponctualité" value={tauxPonctualite} />
-                  <ProgressBar label="Ancienneté" value={anciennetePct} suffix="" />
+                  <p className="text-white/70 mt-1 capitalize text-sm">
+                    {new Date().toLocaleDateString('fr-FR', {
+                      weekday: 'long', day: 'numeric', month: 'long',
+                    })}
+                  </p>
                 </div>
-              )}
-            </Section>
 
-            <Section title="Mes badges" icon={Award}>
-              {loading ? <Skeleton count={4} h="h-9" /> : (
-                <div>{badges.map((b, i) => <Badge key={i} {...b} />)}</div>
-              )}
-            </Section>
-          </div>
+                {/* Le pointage passe par une modale : géolocalisation,
+                    choix de méthode et caméra demandent une étape, pas
+                    un clic sec. */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 mt-5">
+                  <button
+                    onClick={() => setModalPointage(true)}
+                    className={`flex items-center justify-center gap-2 text-sm font-bold px-5 py-2.5 rounded-xl shadow-sm transition-colors ${
+                      pointageActif
+                        ? 'bg-red-500 hover:bg-red-600 text-white'
+                        : 'bg-white hover:bg-white/90 text-brand-texte'
+                    }`}
+                  >
+                    {facialDisponible ? <ScanFace className="w-4 h-4" /> : <Camera className="w-4 h-4" />}
+                    {pointageActif ? 'Pointer le départ' : "Pointer l'arrivée"}
+                  </button>
 
-          <Section
-            title="Congés et absences"
-            icon={Calendar}
-            action={
-              <button
-                onClick={() => setShowLeaveModal(true)}
-                className="flex items-center gap-1.5 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:opacity-90 transition-opacity"
-                style={{ backgroundColor: GREEN }}
-              >
-                <Plus className="w-3.5 h-3.5" /> Demander
-              </button>
-            }
-          >
-            {solde && (
-              <div
-                className="flex items-center justify-between p-4 rounded-xl mb-4"
-                style={{ backgroundColor: BG_SOFT }}
-              >
-                <div>
-                  <span className="text-xs" style={{ color: INK_SOFT }}>Solde de congés</span>
-                  <div className="text-2xl font-semibold" style={{ color: INK }}>
-                    {solde.restants}
-                    <span className="text-sm font-normal" style={{ color: INK_SOFT }}>
-                      {' '}/ {solde.total} jours
-                    </span>
+                  <div className="flex items-center gap-2 text-xs text-white/80 bg-white/15 px-3 py-2.5 rounded-xl">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${
+                      pointageActif ? 'bg-white animate-pulse' : 'bg-white/40'
+                    }`} />
+                    {pointageActif ? `En service depuis ${heureArrivee}` : 'Hors service'}
                   </div>
                 </div>
-                <div className="text-right text-xs" style={{ color: INK_SOFT }}>
-                  <div>{solde.utilises} jour{solde.utilises > 1 ? 's' : ''} pris</div>
-                  {solde.enAttente > 0 && (
-                    <div className="mt-0.5" style={{ color: '#b45309' }}>
-                      {solde.enAttente} en attente · {solde.previsionnels} restants si accordés
-                    </div>
-                  )}
-                </div>
               </div>
-            )}
 
-            {loading ? <Skeleton count={2} /> : conges.length === 0 ? (
-              <EmptyState emoji="🌴" text="Aucune demande de congé" />
-            ) : (
-              <div className="space-y-2">
-                {conges.slice(0, 4).map(c => {
-                  const style = STYLE_CONGE[c.statut] ?? STYLE_CONGE_DEFAUT;
-                  const StatutIcon = style.icon;
+              {/* Les trois chiffres que le salarié vient chercher.
+                  Le solde de congés vient en premier : c'est celui
+                  qu'il ouvrait la page pour voir. */}
+              <div className="flex gap-3 flex-wrap lg:justify-end shrink-0">
+                <ChiffreAccueil
+                  icone={Palmtree}
+                  valeur={chargement ? '…' : solde ? `${solde.restants} j` : '—'}
+                  libelle="Congés restants"
+                />
+                <ChiffreAccueil
+                  icone={CheckCircle2}
+                  valeur={chargement ? '…' : nbOuvrables > 0 ? `${joursPresents}/${nbOuvrables}` : '—'}
+                  libelle="Jours travaillés"
+                />
+                <ChiffreAccueil
+                  icone={TrendingUp}
+                  valeur={chargement ? '…' : formaterAnciennete(moisAnciennete)}
+                  libelle="Ancienneté"
+                />
+              </div>
+            </div>
+
+            {/* ── Distinctions ── */}
+            {!chargement && distinctions.length > 0 && (
+              <div className="px-5 sm:px-7 py-3 bg-black/10 flex items-center gap-4 flex-wrap">
+                {distinctions.map((d, i) => {
+                  const Icone = d.icone;
                   return (
-                    <div
-                      key={c.id}
-                      className="flex items-center justify-between p-3 rounded-xl"
-                      style={{ backgroundColor: BG_SOFT }}
-                    >
-                      <div>
-                        <div className="text-sm font-medium" style={{ color: INK }}>
-                          {libelle(LIBELLES_TYPE_CONGE, c.type)}
-                        </div>
-                        <div className="text-xs" style={{ color: INK_SOFT }}>
-                          {jourCourt(c.dateDebut)} → {jourCourt(c.dateFin)} · {c.nbJours} j
-                        </div>
-                      </div>
-                      <span
-                        className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full"
-                        style={{ backgroundColor: style.bg, color: style.text }}
-                      >
-                        <StatutIcon className="w-3.5 h-3.5" />
-                        {libelle(LIBELLES_STATUT_CONGE, c.statut)}
-                      </span>
-                    </div>
+                    <span key={i} className="flex items-center gap-1.5 text-[11px] font-bold text-white/90">
+                      <Icone className="w-3.5 h-3.5" />
+                      {d.texte}
+                    </span>
                   );
                 })}
               </div>
             )}
-          </Section>
+          </div>
 
-          <Section title="Prochains événements" icon={Calendar}>
-            {loading ? <Skeleton count={3} h="h-10" /> : evenements.length === 0 ? (
-              <EmptyState emoji="📅" text="Aucun événement à venir" />
+          {/* ── Trois anneaux ── */}
+          {/* Les mêmes chiffres qu'avant, retournés : « ponctualité »
+              plutôt que « retard cumulé ». Le détail sous le libellé
+              garde les minutes brutes, donc rien n'est masqué. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {chargement ? (
+              <>
+                <Squelette nb={1} h="h-32" />
+                <Squelette nb={1} h="h-32" />
+                <Squelette nb={1} h="h-32" />
+              </>
             ) : (
-              <div className="space-y-3">
-                {evenements.map((ev: any) => (
-                  <div
-                    key={ev.id}
-                    className="flex items-center gap-3 pl-3 border-l-2"
-                    style={{ borderColor: GREEN }}
-                  >
-                    <div>
-                      <div className="text-sm font-medium" style={{ color: INK }}>{ev.titre}</div>
-                      <div className="text-xs" style={{ color: INK_SOFT }}>
-                        {new Date(ev.dateDebut).toLocaleDateString('fr-FR', {
-                          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Section>
-        </div>
-      </div>
+              <>
+                <CarteAnneau
+                  delai={120}
+                  icone={CheckCircle2}
+                  titre="Présence"
+                  valeur={tauxAssiduite}
+                  affichage={derniereFacture ? `${Math.round(tauxAssiduite)}%` : '—'}
+                  detail={derniereFacture
+                    ? `${joursPresents} jours travaillés sur ${nbOuvrables} ouvrables`
+                    : 'Aucun bulletin pour le moment'}
+                  couleur="#4F46E5"
+                />
 
-      {showLeaveModal && (
-        <ModalDemandeConge
-          onClose={() => setShowLeaveModal(false)}
-          onSuccess={() => {
-            montrerFlash('Demande de congé envoyée');
-            chargerConges();
-          }}
-        />
-      )}
-    </Layout>
+                <CarteAnneau
+                  delai={180}
+                  icone={Clock}
+                  titre="Ponctualité"
+                  valeur={tauxPonctualite}
+                  affichage={derniereFacture ? `${Math.round(tauxPonctualite)}%` : '—'}
+                  detail={derniereFacture
+                    ? (retardMin === 0
+                      ? 'Aucun retard enregistré'
+                      : `${retardMin} min de retard, soit ${Math.round(retardMoyen)} min par jour`)
+                    : 'Aucun bulletin pour le moment'}
+                  couleur={tauxPonctualite >= 80 ? '#4F46E5' : '#F59E0B'}
+                  alerte={Boolean(derniereFacture) && tauxPonctualite < 80}
+                />
+
+                <CarteAnneau
+                  delai={240}
+                  icone={Palmtree}
+                  titre="Congés restants"
+                  valeur={partConges}
+                  affichage={solde ? `${solde.restants}` : '—'}
+                  detail={solde
+                    ? `sur ${solde.total} jours · ${solde.utilises} pris`
+                      + (solde.enAttente > 0 ? ` · ${solde.enAttente} en attente` : '')
+                    : 'Solde indisponible'}
+                  couleur="#4F46E5"
+                />
+              </>
+            )}
+          </div>
+
+          {/* ── Ce qui vient ── */}
+          {/* Congés et événements dans une seule file : c'est l'ordre
+              chronologique qui répond à « qu'est-ce qui m'attend ». */}
+          {!chargement && prochaines.length > 0 && (
+            <Apparition delai={240}>
+              <div className="bg-surface rounded-2xl shadow-sm border border-stone-100 p-5 sm:p-6">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <h3 className="font-bold text-stone-800 flex items-center gap-2 text-sm">
+                    <CalendarDays className="w-4 h-4 text-brand-texte" />
+                    Ce qui vient
+                  </h3>
+                  <button
+                    onClick={() => navigate('/employe/agenda')}
+                    className="flex items-center gap-1 text-xs font-bold text-brand-texte hover:underline"
+                  >
+                    Mon agenda <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                {/* Une file horizontale qui défile sur téléphone : quatre
+                    échéances empilées verticalement occuperaient tout
+                    l'écran avant les chiffres de paie. */}
+                <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 snap-x">
+                  {prochaines.map((e, i) => {
+                    const jours = Math.max(0, Math.ceil(
+                      (new Date(e.debut).getTime() - maintenant) / 86400000
+                    ));
+                    const conge = e.genre === 'conge';
+
+                    return (
+                      <button
+                        key={e.id}
+                        onClick={() => navigate(e.route)}
+                        style={{ animationDelay: `${280 + i * 70}ms` }}
+                        className="hrup-monter hrup-carte snap-start shrink-0 w-64 text-start rounded-xl border border-stone-100 bg-stone-50 hover:bg-surface hover:shadow-md p-4"
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-2.5">
+                          <span className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                            conge ? 'bg-brand-500/10' : 'bg-blue-50'
+                          }`}>
+                            {conge
+                              ? <Palmtree className="w-4 h-4 text-brand-texte" />
+                              : e.visio
+                                ? <Video className="w-4 h-4 text-blue-600" />
+                                : <CalendarDays className="w-4 h-4 text-blue-600" />}
+                          </span>
+
+                          <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-surface text-stone-500 border border-stone-100">
+                            {jours === 0 ? "Aujourd'hui" : jours === 1 ? 'Demain' : `J-${jours}`}
+                          </span>
+                        </div>
+
+                        <div className="text-sm font-bold text-stone-800 truncate">
+                          {e.titre}
+                        </div>
+                        <p className="text-[11px] text-stone-500 mt-0.5 truncate">
+                          {e.detail}
+                        </p>
+
+                        {e.inscrit && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold mt-2 px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-texte">
+                            <CheckCircle2 className="w-2.5 h-2.5" />
+                            Inscrit
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </Apparition>
+          )}
+
+          {/* ── Paie et congés ── */}
+          {/* Deux tiers / un tiers : la paie porte une courbe et trois
+              lignes, le solde de congés une barre. Leur donner la même
+              largeur aurait laissé un vide à droite. */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <Apparition delai={300} className="lg:col-span-2">
+              <div className="bg-surface rounded-2xl shadow-sm border border-stone-100 p-5 sm:p-6 h-full">
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <h3 className="font-bold text-stone-800 flex items-center gap-2 text-sm">
+                    <FileText className="w-4 h-4 text-brand-texte" />
+                    Ma paie
+                  </h3>
+                  {factures.length > 0 && (
+                    <button
+                      onClick={() => navigate('/employe/factures')}
+                      className="flex items-center gap-1 text-xs font-bold text-brand-texte hover:underline"
+                    >
+                      Voir tout <ArrowRight className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                {chargement ? <Squelette nb={3} /> : factures.length === 0 ? (
+                  <Vide icone={FileText} texte="Aucune fiche de paie disponible" />
+                ) : (
+                  <>
+                    {/* Le dernier net en grand, et la tendance à côté :
+                        un chiffre seul ne dit pas s'il monte. */}
+                    <div className="flex items-end justify-between gap-4 pb-5 mb-4 border-b border-stone-100">
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
+                          Dernier net perçu
+                        </div>
+                        <div className="text-3xl font-bold text-stone-800 mt-1">
+                          {netAnime.toFixed(3)}
+                          <span className="text-sm font-normal text-stone-400 ms-1.5">TND</span>
+                        </div>
+                        <div className="text-xs text-stone-500 mt-0.5">
+                          {derniereFacture?.moisLabel}
+                        </div>
+                      </div>
+
+                      {courbeNet.length > 1 && (
+                        <div className="text-end">
+                          <Courbe valeurs={courbeNet} />
+                          <div className="text-[10px] text-stone-400 mt-1">
+                            {courbeNet.length} derniers bulletins
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      {factures.slice(0, 3).map((f: any, i: number) => (
+                        <div
+                          key={f.id}
+                          style={{ animationDelay: `${380 + i * 70}ms` }}
+                          className="hrup-monter flex items-center justify-between gap-3 p-3 rounded-xl bg-stone-50"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-stone-800">
+                              {f.moisLabel}
+                            </div>
+                            <div className="text-[10px] font-mono text-stone-400 truncate">
+                              {f.numero}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-bold text-sm text-brand-texte">
+                              {f.salaireNet?.toFixed(3)}
+                            </span>
+                            {/* Le PDF vit sur S3 (ou sur disque en local) :
+                                on passe par l'API plutôt que par un base64
+                                embarqué. */}
+                            {f.pdfKey && (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    const blob = await api.get(
+                                      `/factures/pdf/${encodeURIComponent(f.id)}`,
+                                      { responseType: 'blob' }
+                                    ) as unknown as Blob;
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = `${f.numero}.pdf`;
+                                    a.click();
+                                    setTimeout(() => URL.revokeObjectURL(url), 5000);
+                                  } catch {
+                                    setToast('Bulletin indisponible');
+                                  }
+                                }}
+                                className="p-1.5 hover:bg-surface rounded-lg transition-colors"
+                                title="Télécharger le bulletin"
+                              >
+                                <Download className="w-3.5 h-3.5 text-brand-texte" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </Apparition>
+
+            <Apparition delai={360}>
+              <div className="bg-surface rounded-2xl shadow-sm border border-stone-100 p-5 sm:p-6 h-full flex flex-col">
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <h3 className="font-bold text-stone-800 flex items-center gap-2 text-sm">
+                    <Palmtree className="w-4 h-4 text-brand-texte" />
+                    Mes congés
+                  </h3>
+                  <button
+                    onClick={() => setModalConge(true)}
+                    className="flex items-center gap-1.5 bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Demander
+                  </button>
+                </div>
+
+                {chargement ? <Squelette nb={2} /> : (
+                  <>
+                    {solde && (
+                      <div className="mb-5">
+                        <div className="flex items-baseline gap-1.5 mb-3">
+                          <span className="text-3xl font-bold text-stone-800">
+                            {solde.restants}
+                          </span>
+                          <span className="text-sm text-stone-400">
+                            jour{solde.restants > 1 ? 's' : ''} restants sur {solde.total}
+                          </span>
+                        </div>
+
+                        <BarreConges
+                          pris={solde.utilises}
+                          enAttente={solde.enAttente}
+                          total={solde.total}
+                        />
+                      </div>
+                    )}
+
+                    <div className="space-y-2 flex-1">
+                      {conges.length === 0 ? (
+                        <Vide
+                          icone={Calendar}
+                          texte="Aucune demande"
+                          action={
+                            <button
+                              onClick={() => setModalConge(true)}
+                              className="text-sm font-bold text-brand-texte hover:underline"
+                            >
+                              Poser des dates
+                            </button>
+                          }
+                        />
+                      ) : conges.slice(0, 3).map((c, i) => {
+                        const style = styleConge(c.statut);
+                        const StatutIcone = style.icon;
+                        return (
+                          <div
+                            key={c.id}
+                            style={{ animationDelay: `${440 + i * 70}ms` }}
+                            className="hrup-monter flex items-center justify-between gap-2 p-3 rounded-xl bg-stone-50"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-stone-800 truncate">
+                                {libelle(LIBELLES_TYPE_CONGE, c.type)}
+                              </div>
+                              <div className="text-[10px] text-stone-400">
+                                {jourCourt(c.dateDebut)} → {jourCourt(c.dateFin)}
+                              </div>
+                            </div>
+                            <span
+                              className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full shrink-0 ${style.bg} ${style.text}`}
+                              title={libelle(LIBELLES_STATUT_CONGE, c.statut)}
+                            >
+                              <StatutIcone className="w-3 h-3" />
+                              {libelle(LIBELLES_STATUT_CONGE, c.statut)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </Apparition>
+          </div>
+
+          {/* ── Le mois en chiffres, les accès, les frais ── */}
+          {/* Les accès rapides remontent sous les chiffres du mois et
+              absorbent la hauteur restante : les trois cartes finissent
+              exactement sur la même ligne, au lieu de laisser un vide
+              sous les quatre chiffres quand les frais sont vides. */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <div className="lg:col-span-2 flex flex-col gap-4">
+            <Apparition delai={420}>
+              <div className="bg-surface rounded-2xl shadow-sm border border-stone-100 p-5 sm:p-6">
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <h3 className="font-bold text-stone-800 flex items-center gap-2 text-sm">
+                    <TrendingUp className="w-4 h-4 text-brand-texte" />
+                    Mon mois en chiffres
+                  </h3>
+                  {derniereFacture && (
+                    <span className="text-xs text-stone-400">{derniereFacture.moisLabel}</span>
+                  )}
+                </div>
+
+                {chargement ? <Squelette nb={1} h="h-20" /> : !derniereFacture ? (
+                  <Vide icone={TrendingUp} texte="Aucun bulletin disponible pour le moment" />
+                ) : (
+                  // Les anneaux plus haut donnent déjà les pourcentages :
+                  // ici les chiffres bruts, ceux qu'on vérifie contre un
+                  // bulletin de paie.
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {([
+                      [String(joursPresents), 'jours travaillés'],
+                      [String(nbOuvrables), 'jours ouvrables'],
+                      [String(joursAbsents), joursAbsents === 1 ? 'absence' : 'absences'],
+                      [`${retardMin} min`, 'de retard cumulé'],
+                    ] as [string, string][]).map(([valeur, texte], i) => (
+                      <div
+                        key={texte}
+                        style={{ animationDelay: `${480 + i * 70}ms` }}
+                        className="hrup-monter p-4 rounded-xl bg-stone-50"
+                      >
+                        <div className="text-xl font-bold text-stone-800">{valeur}</div>
+                        <div className="text-[10px] text-stone-400 mt-0.5">{texte}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Apparition>
+
+            <Apparition delai={540} className="flex-1">
+              <BandeAcces />
+            </Apparition>
+            </div>
+
+            <Apparition delai={480}>
+              <div className="bg-surface rounded-2xl shadow-sm border border-stone-100 p-5 sm:p-6 h-full">
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <h3 className="font-bold text-stone-800 flex items-center gap-2 text-sm">
+                    <Receipt className="w-4 h-4 text-brand-texte" />
+                    Notes de frais
+                  </h3>
+                  <button
+                    onClick={() => navigate('/notes-frais')}
+                    className="flex items-center gap-1 text-xs font-bold text-brand-texte hover:underline"
+                  >
+                    Gérer <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                {chargement ? <Squelette nb={2} h="h-12" />
+                  : !frais || (frais.aRembourser === 0 && frais.enAttente === 0) ? (
+                  <Vide
+                    icone={Receipt}
+                    texte="Aucune dépense en cours"
+                    action={
+                      <button
+                        onClick={() => navigate('/notes-frais')}
+                        className="text-sm font-bold text-brand-texte hover:underline"
+                      >
+                        Déclarer une dépense
+                      </button>
+                    }
+                  />
+                ) : (
+                  <div className="space-y-2">
+                    <div className="p-4 rounded-xl bg-stone-50">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
+                        À rembourser
+                      </span>
+                      <div className="text-2xl font-bold mt-1 text-brand-texte">
+                        {tnd(frais.aRembourser)}
+                      </div>
+                      <p className="text-[10px] text-stone-400 mt-0.5">
+                        sur le prochain bulletin
+                      </p>
+                    </div>
+
+                    {frais.enAttente > 0 && (
+                      <div className="flex items-start gap-2 text-xs rounded-xl px-3 py-2.5 bg-amber-50 text-amber-700">
+                        <Hourglass className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        {tnd(frais.enAttente)} en attente de validation
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </Apparition>
+          </div>
+        </div>
+
+        {modalPointage && (
+          <ModalPointage
+            depart={pointageActif}
+            facialDisponible={facialDisponible}
+            onClose={() => setModalPointage(false)}
+            onSuccess={(msg) => { setToast(msg); chargerPointage(); }}
+          />
+        )}
+
+        {modalConge && (
+          <ModalDemandeConge
+            onClose={() => setModalConge(false)}
+            onSuccess={() => {
+              setToast('Demande de congé envoyée');
+              chargerConges();
+            }}
+          />
+        )}
+
+        {toast && <Toast message={toast} onClose={() => setToast('')} />}
+
+        <style>{STYLES_ANIMATION}</style>
+      </Layout>
+    </div>
   );
 }

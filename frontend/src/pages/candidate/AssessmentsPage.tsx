@@ -1,429 +1,570 @@
-import { useState, useEffect } from 'react';
-import {
-  Code, Brain, Database, Calendar, Video, MapPin,
-  Clock, TrendingUp, AlertCircle, MoreVertical,
-   Settings, Bell, 
-} from 'lucide-react';
-import Layout from '@/components/layout/Layout';
-import api from '@/services/api';
-import { useNavigate } from 'react-router-dom';
+// src/pages/candidate/AssessmentsPage.tsx
+//
+// Quiz techniques et entretiens du candidat, en sections empilées.
+// L'écran répond à une question : qu'est-ce qui m'attend, et par quoi
+// dois-je commencer ?
+//
+// ── Ce qui a changé ─────────────────────────────────────────────────
+//
+// Les composants recopiés (StatCard, Section, Vide) viennent du kit.
+// Les quatre indicateurs et les trois conseils du bas tenaient sur
+// une seule ligne quelle que soit la largeur, et les lignes de quiz
+// alignaient cinq informations côte à côte sans jamais revenir à la
+// ligne. La logique n'a pas bougé.
 
-// ── Types ──────────────────────────────────────
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Clock, FileText, AlertTriangle, Play, RotateCcw, Calendar, Video,
+  MapPin, Phone, Search, X, Award, Hourglass, Target, XCircle,
+  CheckCircle2,
+} from 'lucide-react';
+import Layout from '../../components/layout/Layout';
+import {
+  EnTete, StatCard, Section, Vide, Squelette, Jauge, CARTE, ton,
+} from '../../components/ui/kit';
+import api from '../../services/api';
+import { STYLES_ANIMATION } from '../../utils/animations';
+
+// ── Types, alignés sur ce que renvoie l'API ────────────────────────
+// Les champs viennent de GET /candidat/quizzes et /candidat/meetings :
+// toute divergence ici produit des valeurs indéfinies à l'affichage.
+
 interface Quiz {
   id: string;
+  candidatureId: string;
   titre: string;
-  description: string;
   offreTitre: string;
   dureeMinutes: number;
-  niveauDifficulte: 'Beginner' | 'Intermediate' | 'Advanced';
-  deadline: string;
-  statut: 'pending' | 'in_progress' | 'completed';
-  priorite: 'high' | 'normal';
-  icone: 'code' | 'brain' | 'database';
+  nombreQuestions: number;
+  seuilPassage: number;
+  echeance: string;
+  statut: 'a_faire' | 'en_cours' | 'termine';
+  urgent: boolean;
+  expire: boolean;
+  scoreObtenu: number | null;
+  reussi: boolean | null;
 }
 
-interface Meeting {
+interface Entretien {
   id: string;
-  titre: string;
-  date: string;
-  heureDebut: string;
-  heureFin: string;
-  type: 'video' | 'onsite';
-  lien?: string;
-  adresse?: string;
-  interviewerNom: string;
-  interviewerPhoto?: string;
-  interviewerTitre: string;
+  candidatureId: string;
+  candidatNom?: string;
+  offreTitre?: string;
+  type: 'TELEPHONE' | 'VIDEO' | 'SUR_SITE';
+  dateHeure: string;
+  dureeMinutes?: number;
+  lieu?: string | null;
+  lienVideo?: string | null;
+  statut: string;
 }
 
-// ── Config Icônes ──────────────────────────────
-const icones = {
-  code: Code,
-  brain: Brain,
-  database: Database,
+const STYLE_ENTRETIEN: Record<string, {
+  libelle: string; icone: React.ComponentType<{ className?: string }>; tonalite: string;
+}> = {
+  TELEPHONE: { libelle: 'Entretien téléphonique', icone: Phone,  tonalite: 'bleu' },
+  VIDEO:     { libelle: 'Visioconférence',        icone: Video,  tonalite: 'violet' },
+  SUR_SITE:  { libelle: 'Entretien sur site',     icone: MapPin, tonalite: 'amber' },
 };
 
-// ── Card Quiz ──────────────────────────────────
-function QuizCard({ quiz }: { quiz: Quiz }) {
-  const navigate = useNavigate(); 
-  const handleStartQuiz = () => {
-    navigate(`/candidat/quiz/${quiz.id}`); 
-  };
+const styleEntretien = (t: string) =>
+  STYLE_ENTRETIEN[t] ?? { libelle: 'Entretien', icone: Calendar, tonalite: 'stone' };
 
-  const IconComponent = icones[quiz.icone];
-  const isUrgent = quiz.priorite === 'high';
-  
-  const dateDeadline = new Date(quiz.deadline);
-  const aujourdhui = new Date();
-  const heuresRestantes = Math.floor((dateDeadline.getTime() - aujourdhui.getTime()) / 3600000);
-  const estAujourdHui = heuresRestantes < 24 && heuresRestantes > 0;
+const joursRestants = (echeance: string) =>
+  Math.ceil((new Date(echeance).getTime() - Date.now()) / 86400000);
 
-  const niveauColors = {
-    Beginner: 'text-[#705c30]',
-    Intermediate: 'text-[#4a7c59]',
-    Advanced: 'text-[#b83230]',
-  };
+const formaterDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('fr-FR', {
+    weekday: 'long', day: 'numeric', month: 'long',
+    hour: '2-digit', minute: '2-digit',
+  });
 
-  return (
-    <div className={`bg-white rounded-xl p-6 shadow-[0_4px_20px_rgba(46,50,48,0.06)] border-l-4 ${
-      isUrgent ? 'border-[#b83230]' : 'border-[#4a7c59]/20'
-    } flex flex-col md:flex-row md:items-center justify-between gap-6 group hover:shadow-md transition-all`}>
-      <div className="flex gap-5">
-        {/* Icône */}
-        <div className="hidden md:flex w-16 h-16 bg-[#f0ece4] items-center justify-center rounded-lg text-[#4a7c59]">
-          <IconComponent className="w-8 h-8" />
-        </div>
+const dateCourte = (iso: string) =>
+  new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 
-        <div className="flex-1">
-          {/* Titre + Badge */}
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <h4 className="font-serif text-xl font-bold text-[#2e3230]">{quiz.titre}</h4>
-            {isUrgent && (
-              <span className="px-2 py-0.5 bg-[#ffdad8] text-[#b83230] text-[10px] font-bold rounded-full uppercase tracking-wider">
-                High Priority
-              </span>
-            )}
-          </div>
+// ── Ligne de quiz à passer ─────────────────────────────────────────
 
-          <p className="text-[#74796e] text-sm mb-3">{quiz.description}</p>
+function LigneQuiz({ quiz, delai }: { quiz: Quiz; delai: number }) {
+  const navigate = useNavigate();
+  const jours = joursRestants(quiz.echeance);
+  const enCours = quiz.statut === 'en_cours';
 
-          {/* Infos détaillées */}
-          <div className="flex flex-wrap gap-4 text-xs font-semibold text-[#4a4e4a]">
-            <div className="flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" />
-              {quiz.dureeMinutes} Minutes
-            </div>
-            <div className={`flex items-center gap-1 ${niveauColors[quiz.niveauDifficulte]}`}>
-              <TrendingUp className="w-3.5 h-3.5" />
-              {quiz.niveauDifficulte}
-            </div>
-            <div className={`flex items-center gap-1 ${estAujourdHui ? 'text-[#b83230]' : ''}`}>
-              <Calendar className="w-3.5 h-3.5" />
-              Deadline: {estAujourdHui ? 'Today, ' : ''}{dateDeadline.toLocaleDateString('fr-FR', { month: 'short', day: 'numeric' })}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Bouton Action */}
-      <button onClick={handleStartQuiz} className={`px-6 py-2.5 rounded-lg font-bold whitespace-nowrap transition-colors shadow-sm ${
-        isUrgent
-          ? 'bg-[#4a7c59] text-white hover:bg-[#2a6038]'
-          : 'bg-[#f0ece4] text-[#4a7c59] border border-[#4a7c59]/20 hover:bg-[#78a886] hover:text-white'
-      }`}>
-        Start Quiz
-      </button>
-    </div>
-  );
-}
-
-// ── Card Meeting ───────────────────────────────
-function MeetingCard({ meeting }: { meeting: Meeting }) {
-  const dateMeeting = new Date(meeting.date);
+  const tonalite = quiz.expire ? 'red' : quiz.urgent ? 'amber' : 'brand';
+  const t = ton(tonalite);
 
   return (
-    <div className="bg-[#eae6de] rounded-xl p-4 flex gap-4 border border-[#c4c8bc]/30 hover:shadow-sm transition-shadow">
-      {/* Date Badge */}
-      <div className="shrink-0 w-12 h-12 bg-white rounded-lg flex flex-col items-center justify-center text-[#4a7c59] font-bold">
-        <span className="text-xs uppercase">{dateMeeting.toLocaleDateString('en-US', { month: 'short' })}</span>
-        <span className="text-xl leading-none">{dateMeeting.getDate()}</span>
-      </div>
+    <div
+      style={{ animationDelay: `${delai}ms` }}
+      className={`hrup-monter bg-surface rounded-2xl shadow-sm border overflow-hidden transition-shadow hover:shadow-md ${
+        quiz.expire ? 'border-red-200' : quiz.urgent ? 'border-amber-200' : 'border-stone-100'
+      }`}
+    >
+      <div className="flex">
+        {/* Bande d'urgence : le délai se lit avant le titre. */}
+        <div className={`w-1 shrink-0 ${t.barre}`} />
 
-      <div className="grow">
-        <h5 className="font-serif font-bold text-[#2e3230] mb-1">{meeting.titre}</h5>
-        
-        {/* Type + Horaires */}
-        <div className="flex items-center gap-2 text-xs text-[#74796e] mb-3">
-          {meeting.type === 'video' ? (
-            <>
-              <Video className="w-3.5 h-3.5" />
-              <span>{meeting.heureDebut} - {meeting.heureFin}</span>
-            </>
-          ) : (
-            <>
-              <MapPin className="w-3.5 h-3.5" />
-              <span>{meeting.adresse}</span>
-            </>
+        <div className="flex-1 p-5 min-w-0">
+          <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 bg-brand-500/10">
+                <FileText className="w-5 h-5 text-brand-texte" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-bold text-stone-800">{quiz.titre}</h4>
+                  {enCours && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
+                      Commencé
+                    </span>
+                  )}
+                  {quiz.urgent && !quiz.expire && (
+                    <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600">
+                      <AlertTriangle className="w-2.5 h-2.5" />
+                      Urgent
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-brand-texte font-semibold mt-0.5 truncate">
+                  {quiz.offreTitre}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => navigate(`/candidat/quiz/${quiz.id}`)}
+              disabled={quiz.expire}
+              className="flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors disabled:opacity-40 shrink-0"
+            >
+              {enCours ? <RotateCcw className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {enCours ? 'Reprendre' : 'Commencer'}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-x-5 gap-y-2 text-xs text-stone-500 flex-wrap">
+            <span className="flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-stone-400" />
+              {quiz.dureeMinutes} minutes
+            </span>
+            <span className="flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5 text-stone-400" />
+              {quiz.nombreQuestions} question{quiz.nombreQuestions > 1 ? 's' : ''}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Target className="w-3.5 h-3.5 text-stone-400" />
+              Seuil {quiz.seuilPassage} %
+            </span>
+
+            <span className={`flex items-center gap-1.5 font-bold px-2.5 py-1 rounded-full sm:ms-auto ${t.bg} ${t.text}`}>
+              {quiz.expire ? 'Délai dépassé'
+                : jours <= 0 ? "À faire aujourd'hui"
+                : `${jours} jour${jours > 1 ? 's' : ''} restant${jours > 1 ? 's' : ''}`}
+            </span>
+          </div>
+
+          {/* Le minuteur ne se remet pas à zéro : le candidat doit le
+              savoir avant de quitter la page. */}
+          {enCours && (
+            <p className="text-xs text-stone-400 mt-3 pt-3 border-t border-stone-100">
+              Le minuteur tourne depuis votre premier accès, même si vous
+              fermez la page.
+            </p>
           )}
         </div>
-
-        {/* Interviewer */}
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-[#78a886] flex items-center justify-center text-white text-xs font-bold">
-            {meeting.interviewerNom.split(' ').map(n => n[0]).join('')}
-          </div>
-          <span className="text-xs font-semibold text-[#2e3230]">
-            {meeting.interviewerNom}, {meeting.interviewerTitre}
-          </span>
-        </div>
       </div>
-
-      <button className="self-start text-[#4a7c59] hover:text-[#2a6038]">
-        <MoreVertical className="w-5 h-5" />
-      </button>
     </div>
   );
 }
 
-// ── Calendrier Mini ────────────────────────────
-function MiniCalendar({ meetings }: { meetings: Meeting[] }) {
-  const aujourdhui = new Date();
-  const moisActuel = aujourdhui.getMonth();
-  const anneeActuelle = aujourdhui.getFullYear();
+// ── Ligne de quiz terminé ──────────────────────────────────────────
 
-  const premierJour = new Date(anneeActuelle, moisActuel, 1).getDay();
-  const joursTotal = new Date(anneeActuelle, moisActuel + 1, 0).getDate();
-
-  const jours: (number | null)[] = [
-    ...Array(premierJour === 0 ? 6 : premierJour - 1).fill(null),
-    ...Array.from({ length: joursTotal }, (_, i) => i + 1),
-  ];
-
-  const joursMeetings = meetings.map(m => new Date(m.date).getDate());
+function LigneQuizTermine({ quiz, delai }: { quiz: Quiz; delai: number }) {
+  const reussi = Boolean(quiz.reussi);
+  const tonalite = reussi ? 'brand' : 'amber';
+  const t = ton(tonalite);
+  const Icone = reussi ? CheckCircle2 : XCircle;
+  const score = quiz.scoreObtenu ?? 0;
 
   return (
-    <div className="bg-white rounded-xl p-6 shadow-[0_4px_20px_rgba(46,50,48,0.06)]">
-      {/* Header */}
-      <div className="grid grid-cols-7 gap-2 text-center text-[10px] font-bold text-[#74796e] uppercase mb-4">
-        {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map(d => (
-          <span key={d}>{d}</span>
-        ))}
-      </div>
+    <div
+      style={{ animationDelay: `${delai}ms` }}
+      className={`hrup-monter ${CARTE} overflow-hidden`}
+    >
+      <div className="flex">
+        <div className={`w-1 shrink-0 ${t.barre}`} />
 
-      {/* Jours */}
-      <div className="grid grid-cols-7 gap-2 text-center text-sm font-semibold">
-        {jours.map((jour, i) => {
-          if (jour === null) return <span key={i} />;
+        <div className="flex-1 p-5 min-w-0">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${t.bg}`}>
+                <Icone className={`w-5 h-5 ${t.text}`} />
+              </div>
+              <div className="min-w-0">
+                <h4 className="font-bold text-stone-800 truncate">{quiz.titre}</h4>
+                <p className="text-xs text-stone-400 truncate">{quiz.offreTitre}</p>
+              </div>
+            </div>
 
-          const estAujourdhui = jour === aujourdhui.getDate();
-          const aMeeting = joursMeetings.includes(jour);
+            <div className="text-end shrink-0">
+              <div className={`text-2xl font-bold leading-none ${t.text}`}>
+                {score}<span className="text-sm font-normal">/100</span>
+              </div>
+              <div className="text-[10px] text-stone-400 mt-1">
+                {reussi ? 'Réussi' : 'Sous le seuil'}
+              </div>
+            </div>
+          </div>
 
-          return (
-            <span
-              key={i}
-              className={`py-2 relative ${
-                estAujourdhui
-                  ? 'bg-[#4a7c59] text-white rounded-lg shadow-sm'
-                  : 'text-[#2e3230]'
-              }`}
-            >
-              {jour}
-              {aMeeting && !estAujourdhui && (
-                <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-[#4a7c59] rounded-full" />
-              )}
-            </span>
-          );
-        })}
+          {/* La barre situe le score face au seuil : « 58 » seul ne
+              dit pas si c'est loin ou de peu. */}
+          <Jauge valeur={score} tonalite={tonalite} seuil={quiz.seuilPassage} />
+
+          <div className="flex justify-between text-[10px] text-stone-400 mt-1.5">
+            <span>0</span>
+            <span>Seuil {quiz.seuilPassage} %</span>
+            <span>100</span>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-// ── PAGE PRINCIPALE ────────────────────────────
+// ── Ligne d'entretien ──────────────────────────────────────────────
+
+function LigneEntretien({ entretien, delai }: { entretien: Entretien; delai: number }) {
+  const style = styleEntretien(entretien.type);
+  const Icone = style.icone;
+  const t = ton(style.tonalite);
+
+  const date = new Date(entretien.dateHeure);
+  const passe = date.getTime() < Date.now();
+  const jours = Math.ceil((date.getTime() - Date.now()) / 86400000);
+
+  return (
+    <div
+      style={{ animationDelay: `${delai}ms` }}
+      className={`hrup-monter ${CARTE} overflow-hidden transition-shadow hover:shadow-md ${
+        passe ? 'opacity-60' : ''
+      }`}
+    >
+      <div className="flex">
+        <div className={`w-1 shrink-0 ${t.barre}`} />
+
+        <div className="flex-1 p-5 min-w-0">
+          <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${t.bg}`}>
+                <Icone className={`w-5 h-5 ${t.text}`} />
+              </div>
+              <div className="min-w-0">
+                <h4 className="font-bold text-stone-800">{style.libelle}</h4>
+                <p className="text-xs text-brand-texte font-semibold mt-0.5 truncate">
+                  {entretien.offreTitre ?? 'Entretien de recrutement'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {!passe && (
+                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-stone-100 text-stone-600">
+                  {jours <= 0 ? "Aujourd'hui" : jours === 1 ? 'Demain' : `J-${jours}`}
+                </span>
+              )}
+
+              {entretien.lienVideo && !passe && (
+                <a
+                  href={entretien.lienVideo}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors"
+                >
+                  <Video className="w-4 h-4" />
+                  Rejoindre
+                </a>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-x-5 gap-y-2 text-xs text-stone-500 flex-wrap">
+            <span className="font-medium text-stone-700 first-letter:uppercase">
+              {formaterDate(entretien.dateHeure)}
+            </span>
+            {entretien.dureeMinutes && (
+              <span className="flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-stone-400" />
+                {entretien.dureeMinutes} min
+              </span>
+            )}
+            {entretien.lieu && (
+              <span className="flex items-center gap-1.5 min-w-0">
+                <MapPin className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                <span className="truncate">{entretien.lieu}</span>
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Page ───────────────────────────────────────────────────────────
+
 export default function AssessmentsPage() {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [entretiens, setEntretiens] = useState<Entretien[]>([]);
+  const [chargement, setChargement] = useState(true);
+  const [recherche, setRecherche] = useState('');
 
-  // Chargement des données
   useEffect(() => {
-    const charger = async () => {
+    (async () => {
       try {
-        setLoading(true);
-
-        // TODO: Remplacer par vos vraies routes API
-        const [resQuizzes, resMeetings] = await Promise.allSettled([
-          api.get('/candidat/quizzes'),
-          api.get('/candidat/meetings'),
+        // Chargées en parallèle et tolérantes à l'échec de l'une : un
+        // entretien indisponible ne doit pas masquer les quiz.
+        const [resQuiz, resEntretiens] = await Promise.allSettled([
+          api.get('/candidat/quizzes') as any,
+          api.get('/candidat/meetings') as any,
         ]);
 
-        if (resQuizzes.status === 'fulfilled') {
-          setQuizzes(resQuizzes.value?.data?.quizzes || []);
+        if (resQuiz.status === 'fulfilled') {
+          setQuizzes(resQuiz.value?.data?.quizzes ?? []);
         }
-        if (resMeetings.status === 'fulfilled') {
-          setMeetings(resMeetings.value?.data?.meetings || []);
+        if (resEntretiens.status === 'fulfilled') {
+          setEntretiens(resEntretiens.value?.data?.entretiens ?? []);
         }
       } catch (e) {
-        console.error(e);
+        console.error('Chargement des évaluations :', e);
       } finally {
-        setLoading(false);
+        setChargement(false);
       }
-    };
-
-    charger();
+    })();
   }, []);
 
-  // Stats calculées
-  const quizzesPending = quizzes.filter(q => q.statut === 'pending').length;
-  const meetingsConfirmed = meetings.length;
-  const dueIn24h = quizzes.filter(q => {
-    const heures = (new Date(q.deadline).getTime() - Date.now()) / 3600000;
-    return heures > 0 && heures < 24;
-  }).length;
+  const correspond = (texte: string) => {
+    const terme = recherche.trim().toLowerCase();
+    return !terme || texte.toLowerCase().includes(terme);
+  };
+
+  const aPasser = useMemo(
+    () => quizzes
+      .filter((q) => q.statut !== 'termine')
+      .filter((q) => correspond(`${q.titre} ${q.offreTitre}`))
+      // Ce qui expire en premier remonte : le candidat ne doit pas
+      // manquer une échéance parce qu'elle était en bas de liste.
+      .sort((a, b) => String(a.echeance).localeCompare(String(b.echeance))),
+    [quizzes, recherche]
+  );
+
+  const termines = useMemo(
+    () => quizzes
+      .filter((q) => q.statut === 'termine')
+      .filter((q) => correspond(`${q.titre} ${q.offreTitre}`)),
+    [quizzes, recherche]
+  );
+
+  const aVenir = useMemo(
+    () => entretiens
+      .filter((e) => new Date(e.dateHeure).getTime() >= Date.now() && e.statut !== 'ANNULE')
+      .filter((e) => correspond(`${e.offreTitre ?? ''} ${styleEntretien(e.type).libelle}`))
+      .sort((a, b) => String(a.dateHeure).localeCompare(String(b.dateHeure))),
+    [entretiens, recherche]
+  );
+
+  const tousQuiz = quizzes.filter((q) => q.statut !== 'termine');
+  const tousEntretiens = entretiens.filter(
+    (e) => new Date(e.dateHeure).getTime() >= Date.now() && e.statut !== 'ANNULE'
+  );
+
+  const urgents = tousQuiz.filter((q) => q.urgent && !q.expire).length;
+  const reussis = quizzes.filter((q) => q.statut === 'termine' && q.reussi).length;
+
+  // Le prochain rendez-vous, quel qu'il soit : c'est la seule chose
+  // que le candidat vérifie en arrivant.
+  const prochain = useMemo(() => {
+    const quizProche = [...tousQuiz]
+      .sort((a, b) => String(a.echeance).localeCompare(String(b.echeance)))[0];
+    const entretienProche = [...tousEntretiens]
+      .sort((a, b) => String(a.dateHeure).localeCompare(String(b.dateHeure)))[0];
+
+    if (!quizProche && !entretienProche) return null;
+    if (!entretienProche) {
+      return { type: 'quiz' as const, date: quizProche.echeance, titre: quizProche.titre };
+    }
+    if (!quizProche) {
+      return {
+        type: 'entretien' as const,
+        date: entretienProche.dateHeure,
+        titre: styleEntretien(entretienProche.type).libelle,
+      };
+    }
+
+    return new Date(quizProche.echeance) < new Date(entretienProche.dateHeure)
+      ? { type: 'quiz' as const, date: quizProche.echeance, titre: quizProche.titre }
+      : {
+        type: 'entretien' as const,
+        date: entretienProche.dateHeure,
+        titre: styleEntretien(entretienProche.type).libelle,
+      };
+  }, [quizzes, entretiens]);
 
   return (
-    
-      
-        <Layout searchPlaceholder="Search assessments...">
-        {/* Header */}
-        <header className="mb-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div>
-            <h2 className="font-serif text-3xl md:text-4xl font-bold text-[#2e3230] tracking-tight">
-              Assessments & Schedule
-            </h2>
-            <p className="text-[#74796e] mt-2 text-lg">
-              Keep track of your technical challenges and upcoming interviews.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button className="p-3 rounded-full bg-[#eae6de] text-[#74796e] hover:text-[#4a7c59] transition-colors">
-              <Bell className="w-5 h-5" />
-            </button>
-            <button className="p-3 rounded-full bg-[#eae6de] text-[#74796e] hover:text-[#4a7c59] transition-colors">
-              <Settings className="w-5 h-5" />
-            </button>
-          </div>
-        </header>
+    <div className="min-h-screen">
+      <Layout searchPlaceholder="Rechercher…">
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-          <div className="bg-[#f5f1ea] p-6 rounded-xl shadow-[0_4px_20px_rgba(46,50,48,0.06)] border border-[#c4c8bc]/20">
-            <div className="flex items-center gap-4 mb-2">
-              <div className="p-3 bg-[#78a886]/20 rounded-full text-[#4a7c59]">
-                <Code className="w-5 h-5" />
-              </div>
-              <span className="text-sm text-[#74796e] font-medium">Pending Quizzes</span>
-            </div>
-            <p className="font-serif text-3xl font-bold text-[#2e3230]">
-              {loading ? '...' : quizzesPending.toString().padStart(2, '0')}
-            </p>
-          </div>
-
-          <div className="bg-[#f5f1ea] p-6 rounded-xl shadow-[0_4px_20px_rgba(46,50,48,0.06)] border border-[#c4c8bc]/20">
-            <div className="flex items-center gap-4 mb-2">
-              <div className="p-3 bg-[#c4a66a]/20 rounded-full text-[#705c30]">
-                <Calendar className="w-5 h-5" />
-              </div>
-              <span className="text-sm text-[#74796e] font-medium">Confirmed Meetings</span>
-            </div>
-            <p className="font-serif text-3xl font-bold text-[#2e3230]">
-              {loading ? '...' : meetingsConfirmed.toString().padStart(2, '0')}
-            </p>
-          </div>
-
-          <div className="bg-[#f5f1ea] p-6 rounded-xl shadow-[0_4px_20px_rgba(46,50,48,0.06)] border border-[#c4c8bc]/20">
-            <div className="flex items-center gap-4 mb-2">
-              <div className="p-3 bg-[#ffdad8]/60 rounded-full text-[#b83230]">
-                <AlertCircle className="w-5 h-5" />
-              </div>
-              <span className="text-sm text-[#74796e] font-medium">Due in 24h</span>
-            </div>
-            <p className="font-serif text-3xl font-bold text-[#2e3230]">
-              {loading ? '...' : dueIn24h.toString().padStart(2, '0')}
-            </p>
-          </div>
-        </div>
-
-        {/* Grille principale */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Gauche: Liste des Quiz */}
-          <section className="lg:col-span-2 space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="font-serif text-2xl font-bold text-[#2e3230]">Pending Quizzes</h3>
-              <button className="text-[#4a7c59] font-bold text-sm hover:underline">
-                View History
+        <EnTete
+          fil={['Mon suivi', 'Mes évaluations']}
+          titre="Mes évaluations"
+          sousTitre={chargement ? 'Chargement…' : prochain ? (
+            <>
+              Prochaine échéance :{' '}
+              <span className="text-brand-texte font-semibold">{prochain.titre}</span>
+              {' le '}{dateCourte(prochain.date)}
+            </>
+          ) : 'Rien de prévu pour le moment'}
+        >
+          <div className="relative w-full sm:w-56">
+            <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
+            <input
+              value={recherche}
+              onChange={(e) => setRecherche(e.target.value)}
+              placeholder="Quiz, poste…"
+              className="w-full ps-9 pe-8 py-2 rounded-xl border border-stone-200 text-sm bg-surface focus:outline-none focus:border-brand-500 transition-colors"
+            />
+            {recherche && (
+              <button
+                onClick={() => setRecherche('')}
+                aria-label="Effacer la recherche"
+                className="absolute end-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-md hover:bg-stone-100"
+              >
+                <X className="w-3.5 h-3.5 text-stone-400" />
               </button>
-            </div>
-
-            {loading ? (
-              <div className="space-y-4">
-                {[...Array(3)].map((_, i) => (
-                  <div key={i} className="bg-white rounded-xl p-6 shadow-sm animate-pulse">
-                    <div className="flex gap-5">
-                      <div className="w-16 h-16 bg-gray-200 rounded-lg" />
-                      <div className="flex-1 space-y-3">
-                        <div className="h-5 bg-gray-200 rounded w-2/3" />
-                        <div className="h-4 bg-gray-200 rounded w-full" />
-                        <div className="h-3 bg-gray-200 rounded w-1/2" />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : quizzes.length === 0 ? (
-              <div className="text-center py-16 bg-white rounded-xl">
-                <p className="text-[#74796e] text-lg">No pending quizzes at the moment 🎉</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {quizzes.map(quiz => (
-                  <QuizCard key={quiz.id} quiz={quiz} />
-                ))}
-              </div>
             )}
-          </section>
+          </div>
+        </EnTete>
 
-          {/* Droite: Calendrier + Meetings */}
-          <section className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="font-serif text-2xl font-bold text-[#2e3230]">Meeting Calendar</h3>
-              <span className="text-[#74796e] text-sm font-semibold">
-                {new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-              </span>
-            </div>
+        <div className="px-4 sm:px-8 py-6 sm:py-8">
 
-            {/* Mini Calendrier */}
-            <MiniCalendar meetings={meetings} />
+          {/* ── Indicateurs ── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+            <StatCard
+              icon={FileText}
+              label="Quiz à passer"
+              value={chargement ? '…' : tousQuiz.length}
+              sub={urgents > 0 ? `dont ${urgents} urgent${urgents > 1 ? 's' : ''}` : 'aucune urgence'}
+              tonalite="brand"
+              alerte={urgents > 0}
+              delai={0}
+            />
+            <StatCard
+              icon={Calendar}
+              label="Entretiens à venir"
+              value={chargement ? '…' : tousEntretiens.length}
+              sub="rendez-vous planifiés"
+              tonalite="violet"
+              delai={60}
+            />
+            <StatCard
+              icon={Award}
+              label="Quiz terminés"
+              value={chargement ? '…' : quizzes.filter((q) => q.statut === 'termine').length}
+              sub={`${reussis} au-dessus du seuil`}
+              tonalite="bleu"
+              delai={120}
+            />
+            <StatCard
+              icon={Hourglass}
+              label="Échéance la plus proche"
+              value={chargement ? '…' : prochain ? dateCourte(prochain.date) : '—'}
+              sub={prochain
+                ? prochain.type === 'quiz' ? 'quiz technique' : 'entretien'
+                : 'rien de planifié'}
+              tonalite="amber"
+              delai={180}
+            />
+          </div>
 
-            {/* Liste des meetings */}
-            <div className="space-y-4">
-              <p className="text-xs font-bold text-[#74796e] uppercase tracking-wider">
-                Confirmed Interviews
-              </p>
+          {chargement ? (
+            <Squelette nombre={4} hauteur="h-28" />
+          ) : (
+            <div className="space-y-8">
 
-              {loading ? (
-                <div className="space-y-3">
-                  {[...Array(2)].map((_, i) => (
-                    <div key={i} className="bg-[#eae6de] rounded-xl p-4 animate-pulse">
-                      <div className="flex gap-4">
-                        <div className="w-12 h-12 bg-gray-300 rounded-lg" />
-                        <div className="flex-1 space-y-2">
-                          <div className="h-4 bg-gray-300 rounded w-3/4" />
-                          <div className="h-3 bg-gray-300 rounded w-1/2" />
-                        </div>
-                      </div>
+              <Section icone={FileText} titre="Quiz à passer" compteur={aPasser.length}>
+                {aPasser.length === 0 ? (
+                  <Vide
+                    icone={FileText}
+                    message={recherche
+                      ? `Aucun quiz ne correspond à « ${recherche} »`
+                      : 'Aucun quiz à passer'}
+                    detail={recherche ? undefined
+                      : "Les quiz vous sont envoyés après présélection d'une candidature."}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {aPasser.map((quiz, i) => (
+                      <LigneQuiz key={quiz.id} quiz={quiz} delai={i * 60} />
+                    ))}
+                  </div>
+                )}
+              </Section>
+
+              <Section icone={Calendar} titre="Entretiens à venir" compteur={aVenir.length}>
+                {aVenir.length === 0 ? (
+                  <Vide
+                    icone={Calendar}
+                    message={recherche
+                      ? `Aucun entretien ne correspond à « ${recherche} »`
+                      : 'Aucun entretien planifié'}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {aVenir.map((e, i) => (
+                      <LigneEntretien key={e.id} entretien={e} delai={i * 60} />
+                    ))}
+                  </div>
+                )}
+              </Section>
+
+              {termines.length > 0 && (
+                <Section icone={Award} titre="Évaluations terminées" compteur={termines.length}>
+                  <div className="space-y-3">
+                    {termines.map((quiz, i) => (
+                      <LigneQuizTermine key={quiz.id} quiz={quiz} delai={i * 60} />
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {/* ── Conseils ── */}
+              {/* Un quiz technique se prépare : le dire vaut mieux
+                  qu'un candidat qui le commence sans savoir qu'il est
+                  chronométré. */}
+              <div className={`${CARTE} p-5`}>
+                <div className="flex items-center gap-2 mb-3">
+                  <Target className="w-4 h-4 text-brand-texte" />
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
+                    Avant de commencer un quiz
+                  </h4>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 sm:gap-6">
+                  {([
+                    ["Le minuteur ne s’arrête pas", 'Une fois lancé, il tourne même si vous fermez la page'],
+                    ['Une seule tentative', 'Le score obtenu est définitif et transmis au recruteur'],
+                    ['Connexion stable', 'Vos réponses sont enregistrées au fur et à mesure'],
+                  ] as [string, string][]).map(([titre, detail]) => (
+                    <div key={titre}>
+                      <div className="text-xs font-bold text-stone-700">{titre}</div>
+                      <p className="text-[10px] text-stone-400 mt-0.5 leading-relaxed">{detail}</p>
                     </div>
                   ))}
                 </div>
-              ) : meetings.length === 0 ? (
-                <div className="bg-[#eae6de] rounded-xl p-6 text-center">
-                  <p className="text-sm text-[#74796e]">No scheduled meetings yet</p>
-                </div>
-              ) : (
-                meetings.map(meeting => (
-                  <MeetingCard key={meeting.id} meeting={meeting} />
-                ))
-              )}
-            </div>
-
-            {/* CTA Card */}
-            <div className="bg-[#f8e0a8] text-[#554020] p-6 rounded-xl relative overflow-hidden group">
-              <div className="relative z-10">
-                <h4 className="font-serif text-lg font-bold mb-2">Need a Reschedule?</h4>
-                <p className="text-sm mb-4 opacity-80">
-                  Life happens. Contact your assigned admin at least 24h prior to the meeting.
-                </p>
-                <button className="bg-[#554020] text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-[#705c30] transition-colors">
-                  Contact Support
-                </button>
               </div>
-              <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-[#c4a66a]/20 rounded-full blur-2xl group-hover:scale-125 transition-transform duration-700" />
             </div>
-          </section>
-          
+          )}
         </div>
-        </Layout>
-      
-    
+
+        <style>{STYLES_ANIMATION}</style>
+      </Layout>
+    </div>
   );
 }

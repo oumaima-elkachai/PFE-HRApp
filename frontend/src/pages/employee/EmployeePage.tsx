@@ -79,7 +79,7 @@ export default function EmployeeDashboard() {
     <Layout>
       <div className="max-w-5xl">
         {flash && (
-          <div className="fixed top-20 right-6 z-50 bg-[#2d6a4f] text-white px-4 py-3 rounded-xl shadow-lg text-sm">
+          <div className="fixed top-20 end-6 z-50 bg-brand-600 text-white px-4 py-3 rounded-xl shadow-lg text-sm">
             {flash}
           </div>
         )}
@@ -87,19 +87,19 @@ export default function EmployeeDashboard() {
         {/* Header + pointage */}
         <div className="flex items-start justify-between mb-6">
           <div>
-            <h1 className="text-3xl font-bold text-[#1a1a1a] mb-1">{greeting}, {user?.prenom} 👋</h1>
-            <p className="text-[#6b7280] text-sm">
+            <h1 className="text-3xl font-bold text-stone-900 mb-1">{greeting}, {user?.prenom} 👋</h1>
+            <p className="text-stone-500 text-sm">
               {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
             </p>
           </div>
 
           {/* Carte pointage */}
-          <div className="bg-white border border-[#e5e0d8] rounded-2xl px-5 py-4 flex items-center gap-4 shadow-sm">
+          <div className="bg-surface border border-stone-200 rounded-2xl px-5 py-4 flex items-center gap-4 shadow-sm">
             <div>
-              <div className="text-xs font-semibold text-[#9ca3af] uppercase tracking-wider mb-1">Statut</div>
+              <div className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-1">Statut</div>
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${pointageActif ? 'bg-[#2d6a4f] animate-pulse' : 'bg-red-400'}`} />
-                <span className="text-sm font-medium text-[#1a1a1a]">
+                <div className={`w-2 h-2 rounded-full ${pointageActif ? 'bg-brand-600 animate-pulse' : 'bg-red-400'}`} />
+                <span className="text-sm font-medium text-stone-900">
                   {pointageActif ? `En service · ${heureArrivee}` : 'Hors service'}
                 </span>
               </div>
@@ -108,7 +108,7 @@ export default function EmployeeDashboard() {
               onClick={handlePointage}
               disabled={ptLoading}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 ${
-                pointageActif ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-[#2d6a4f] hover:bg-[#1b4332] text-white'
+                pointageActif ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-brand-600 hover:bg-brand-800 text-white'
               }`}
             >
               {ptLoading ? (
@@ -124,16 +124,16 @@ export default function EmployeeDashboard() {
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-5">
           {[
-            { icon: '📄', label: 'Fiches de paie', value: loading ? '...' : factures.length, color: 'bg-[#d8f3dc]' },
+            { icon: '📄', label: 'Fiches de paie', value: loading ? '...' : factures.length, color: 'bg-brand-100' },
             { icon: '📅', label: 'Événements ce mois', value: loading ? '...' : evenements.length, color: 'bg-blue-50' },
             { icon: '🏢', label: 'Mon département', value: user?.departement || '—', color: 'bg-amber-50', text: true },
           ].map((s, i) => (
-            <div key={i} className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
+            <div key={i} className="bg-surface border border-stone-200 rounded-2xl p-5">
               <div className={`w-11 h-11 ${s.color} rounded-xl flex items-center justify-center text-xl mb-3`}>
                 {s.icon}
               </div>
-              <div className="text-xs font-semibold text-[#9ca3af] uppercase tracking-wide mb-1">{s.label}</div>
-              <div className={`font-bold ${s.text ? 'text-base text-[#1a1a1a]' : 'text-3xl text-[#1a1a1a]'}`}>
+              <div className="text-xs font-semibold text-stone-400 uppercase tracking-wide mb-1">{s.label}</div>
+              <div className={`font-bold ${s.text ? 'text-base text-stone-900' : 'text-3xl text-stone-900'}`}>
                 {s.value}
               </div>
             </div>
@@ -142,16 +142,16 @@ export default function EmployeeDashboard() {
 
         <div className="grid grid-cols-2 gap-5">
           {/* Fiches de paie */}
-          <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
+          <div className="bg-surface border border-stone-200 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="font-bold text-[#1a1a1a] flex items-center gap-2">
-                <FileText className="w-4 h-4 text-[#2d6a4f]" />
+              <h2 className="font-bold text-stone-900 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-brand-texte" />
                 Mes fiches de paie
               </h2>
               {/* ✅ Bouton "Voir tout" */}
               <button
                 onClick={() => navigate('/employe/payslips')}
-                className="flex items-center gap-1 text-xs font-medium text-[#2d6a4f] hover:underline"
+                className="flex items-center gap-1 text-xs font-medium text-brand-texte hover:underline"
               >
                 Voir tout
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -164,19 +164,19 @@ export default function EmployeeDashboard() {
                 ))}
               </div>
             ) : factures.length === 0 ? (
-              <div className="text-center py-8 text-sm text-[#9ca3af]">
+              <div className="text-center py-8 text-sm text-stone-400">
                 Aucune fiche de paie disponible
               </div>
             ) : (
               <div className="space-y-3">
                 {factures.map((f: any) => (
-                  <div key={f.id} className="flex items-center justify-between p-3 bg-[#f5f0e8] rounded-xl">
+                  <div key={f.id} className="flex items-center justify-between p-3 bg-stone-100 rounded-xl">
                     <div>
-                      <div className="text-sm font-semibold text-[#1a1a1a]">{f.moisLabel}</div>
-                      <div className="text-xs text-[#9ca3af] font-mono">{f.numero}</div>
+                      <div className="text-sm font-semibold text-stone-900">{f.moisLabel}</div>
+                      <div className="text-xs text-stone-400 font-mono">{f.numero}</div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-[#2d6a4f] text-sm">
+                      <span className="font-bold text-brand-texte text-sm">
                         {f.salaireNet?.toFixed(0)} TND
                       </span>
                       {f.pdfBase64 && (
@@ -187,10 +187,10 @@ export default function EmployeeDashboard() {
                             link.download = `${f.numero}.pdf`;
                             link.click();
                           }}
-                          className="p-1.5 bg-white border border-[#e5e0d8] rounded-lg hover:bg-[#d8f3dc] transition-colors"
+                          className="p-1.5 bg-surface border border-stone-200 rounded-lg hover:bg-brand-100 transition-colors"
                           title="Télécharger PDF"
                         >
-                          <Download className="w-3.5 h-3.5 text-[#2d6a4f]" />
+                          <Download className="w-3.5 h-3.5 text-brand-texte" />
                         </button>
                       )}
                     </div>
@@ -201,9 +201,9 @@ export default function EmployeeDashboard() {
           </div>
 
           {/* Événements (inchangé) */}
-          <div className="bg-white border border-[#e5e0d8] rounded-2xl p-5">
-            <h2 className="font-bold text-[#1a1a1a] flex items-center gap-2 mb-4">
-              <Calendar className="w-4 h-4 text-[#2d6a4f]" />
+          <div className="bg-surface border border-stone-200 rounded-2xl p-5">
+            <h2 className="font-bold text-stone-900 flex items-center gap-2 mb-4">
+              <Calendar className="w-4 h-4 text-brand-texte" />
               Prochains événements
             </h2>
             {loading ? (
@@ -213,17 +213,17 @@ export default function EmployeeDashboard() {
                 ))}
               </div>
             ) : evenements.length === 0 ? (
-              <div className="text-center py-8 text-sm text-[#9ca3af]">
+              <div className="text-center py-8 text-sm text-stone-400">
                 Aucun événement à venir
               </div>
             ) : (
               <div className="space-y-3">
                 {evenements.map((ev: any) => (
-                  <div key={ev.id} className="flex items-start gap-3 p-3 bg-[#f5f0e8] rounded-xl">
-                    <div className="w-1 h-full min-h-8 bg-[#2d6a4f] rounded-full shrink-0" />
+                  <div key={ev.id} className="flex items-start gap-3 p-3 bg-stone-100 rounded-xl">
+                    <div className="w-1 h-full min-h-8 bg-brand-600 rounded-full shrink-0" />
                     <div>
-                      <div className="text-sm font-semibold text-[#1a1a1a]">{ev.titre}</div>
-                      <div className="text-xs text-[#9ca3af]">
+                      <div className="text-sm font-semibold text-stone-900">{ev.titre}</div>
+                      <div className="text-xs text-stone-400">
                         {new Date(ev.dateDebut).toLocaleDateString('fr-FR', {
                           day: 'numeric',
                           month: 'short',

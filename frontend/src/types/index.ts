@@ -43,47 +43,72 @@ export interface Candidat {
   prenom: string;
   email: string;
   telephone?: string;
+  linkedin?: string | null;
   posteVise: string;
   niveauEtude?: string;
   experience?: string;
   lettreMotivation?: string;
   competences: string[];
-  
-  // Statut (avec nouveaux statuts quiz)
-  statut: 'SOUMIS' | 'PRESELECTION' | 'QUIZ_EN_ATTENTE' | 'QUIZ_COMPLETE' | 'ENTRETIEN' | 'OFFRE' | 'EMBAUCHE' | 'REFUSE';
-  
-  historiqueStatuts: HistoriqueStatut[];
-  
-  // Documents
-  cvUrl?: string;
-  cvFileName?: string;
-  cvS3Key?: string;
-  
-  // Scores IA
-  scoreCV?: number;              // 0-100
-  quizResult?: QuizResult;       // Résultat du quiz
-  scoreEntretien?: number;       // 0-100
-  scoreTotal?: number;           // Score global pondéré
-  scoringDetails?: ScoringDetails;
-  
-  // Quiz
-  quizId?: string;
+
+  // Les valeurs doivent correspondre exactement a ce que le serveur
+  // enregistre : une divergence produit un badge par defaut, sans
+  // erreur visible.
+  statut:
+    | 'SOUMIS'
+    | 'PRESELECTION'
+    | 'QUIZ_EN_ATTENTE'
+    | 'QUIZ_ENVOYE'
+    | 'QUIZ_TERMINE'
+    | 'ENTRETIEN'
+    | 'OFFRE'
+    | 'EMBAUCHE'
+    | 'REFUSE';
+
+  historiqueStatuts?: {
+    statut: string;
+    date: string;
+    commentaire?: string;
+    action?: string;
+  }[];
+
+  // ── Documents ──
+  cvFileName?: string | null;
+  cvKey?: string | null;
+
+  // ── Analyse du CV ──
+  scoreCV?: number;
+  recommendation?: 'ACCEPTER' | 'HESITER' | 'REFUSER';
+  analyseIA?: {
+    competencesMatchees?: string[];
+    competencesManquantes?: string[];
+    pointsForts?: string[];
+    pointsFaibles?: string[];
+    resumeAnalyse?: string;
+    niveauExperience?: string;
+    pertinenceFormation?: number;
+  };
+  // Distingue une analyse par le modele d'un repli par mots-cles
+  sourceAnalyse?: 'bedrock' | 'fallback';
+  extractionReussie?: boolean | null;
+
+  // ── Évaluation technique ──
+  quizId?: string | null;
   quizStatus?: 'NON_ENVOYE' | 'ENVOYE' | 'EN_COURS' | 'TERMINE' | 'EXPIRE';
-  quizEnvoyeLe?: string;
-  quizCompleteLe?: string;
   quizExpirationDate?: string;
-  
-  // Entretien
+  quizSessionId?: string;
+  scoreQuiz?: number | null;
+
+  // Score global pondere : 60 % CV, 40 % quiz
+  scoreTotal?: number;
+
+  // ── Entretien ──
   entretien?: EntretienInfo;
   entretienId?: string;
-  entretienScheduledAt?: string;
-  entretienCompletedAt?: string;
-  
-  // Type & Source
+
   type?: 'OFFRE' | 'SPONTANEE';
-  source?: 'site_carriere' | 'linkedin' | 'indeed' | 'referral' | 'direct';
-  
-  soumisLe: string;
+  source?: 'site_carriere' | 'spontanee' | 'linkedin' | 'indeed' | 'referral' | 'direct';
+
+  creeLe: string;
   misAJourLe: string;
 }
 
@@ -696,7 +721,9 @@ export const STATUT_CANDIDAT_LABELS: Record<Candidat['statut'], string> = {
   SOUMIS:          'Soumis',
   PRESELECTION:    'CV Analysé',
   QUIZ_EN_ATTENTE: 'Quiz Envoyé',
-  QUIZ_COMPLETE:   'Quiz Complété',
+  QUIZ_ENVOYE: 'Quiz Envoyé',
+  QUIZ_TERMINE: 'Quiz Complété',
+
   ENTRETIEN:       'Entretien',
   OFFRE:           'Offre',
   EMBAUCHE:        'Embauché',
@@ -707,7 +734,8 @@ export const STATUT_CANDIDAT_COLORS: Record<Candidat['statut'], string> = {
   SOUMIS:          'blue',
   PRESELECTION:    'amber',
   QUIZ_EN_ATTENTE: 'indigo',
-  QUIZ_COMPLETE:   'cyan',
+  QUIZ_ENVOYE:     'vert',
+  QUIZ_TERMINE:   'cyan',
   ENTRETIEN:       'purple',
   OFFRE:           'green',
   EMBAUCHE:        'green',

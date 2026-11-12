@@ -13,7 +13,7 @@ const sizeClasses = {
 };
 
 const colors = [
-  'bg-[#2d6a4f]',
+  'bg-brand-600',
   'bg-[#1e40af]',
   'bg-[#92400e]',
   'bg-[#7c3aed]',

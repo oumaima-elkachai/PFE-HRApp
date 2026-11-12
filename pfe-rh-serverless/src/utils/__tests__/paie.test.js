@@ -267,4 +267,26 @@ describe("Invariants", () => {
       expect(b.fiscal.tauxMoyen).toBeLessThan(45);
     }
   });
+
+
+    test("un remboursement de frais n'est ni cotisé ni imposé", () => {
+    const sans = calculerBulletin(base);
+    const avec = calculerBulletin({ ...base, remboursementsFrais: 300 });
+
+    // Le brut, les cotisations et l'impôt sont identiques
+    expect(avec.brut).toBe(sans.brut);
+    expect(avec.cotisations.total).toBe(sans.cotisations.total);
+    expect(avec.netImposable).toBe(sans.netImposable);
+
+    // Seul le net à payer augmente, du montant exact
+    expect(avec.net).toBeCloseTo(sans.net + 300, 2);
+  });
+
+  test("une prime, elle, est cotisée et imposée", () => {
+    const sans = calculerBulletin(base);
+    const avec = calculerBulletin({ ...base, primes: 300 });
+
+    expect(avec.brut).toBeGreaterThan(sans.brut);
+    expect(avec.cotisations.total).toBeGreaterThan(sans.cotisations.total);
+  });
 });

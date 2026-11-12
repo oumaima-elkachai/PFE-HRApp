@@ -8,6 +8,20 @@
 //
 // Choix assumé : une fonction unique embarquant l'application complète,
 // plutôt qu'une fonction par domaine. Voir AD-06 dans data-design.md.
+//
+// ── Les noms de tables passés à la fonction ────────────────────────
+//
+// Chaque table déclarée dans data-stack.ts doit avoir ici sa variable
+// d'environnement, sans quoi le module qui l'utilise retombe sur son
+// nom de développement — `Messages-local`, `NotesFrais-local` — et
+// interroge sur AWS une table qui n'existe que sur le poste.
+//
+// Ce défaut est silencieux de bout en bout : CDK ne vérifie pas que la
+// liste est complète, la fonction démarre normalement, et l'exception
+// ne survient qu'à l'appel de la route concernée.
+//
+// La règle est donc : une table ajoutée dans data-stack.ts se reporte
+// ici dans le même commit.
 
 import { Stack, StackProps, Duration, CfnOutput, RemovalPolicy } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -97,6 +111,38 @@ export class ApiStack extends Stack {
         TABLE_ENTRETIENS: tables.entretiens.tableName,
         TABLE_NOTIFICATIONS: tables.notifications.tableName,
         TABLE_EVENEMENTS: tables.evenements.tableName,
+        TABLE_PROFILS_CANDIDATS: tables.profilsCandidats.tableName,
+
+        // Ces cinq tables étaient déclarées dans data-stack.ts mais
+        // n'étaient pas transmises à la fonction. Les modules qui les
+        // utilisent écrivent `process.env.TABLE_X || "X-local"` : sans
+        // la variable, la fonction interrogeait sur AWS une table au
+        // nom local, qui n'y existe pas. L'erreur ne sortait ni au
+        // déploiement ni au démarrage, mais à la première requête de
+        // l'utilisateur.
+        TABLE_MESSAGES: tables.messages.tableName,
+        TABLE_NOTES_FRAIS: tables.notesFrais.tableName,
+        TABLE_DEMANDES_DOCUMENTS: tables.demandesDocuments.tableName,
+        TABLE_ALERTES_OFFRES: tables.alertesOffres.tableName,
+        TABLE_BIOMETRIE: tables.biometrie.tableName,
+
+        // Tables ajoutées en même temps que ces variables : sans
+        // elles, Réglages › Entreprise, la messagerie interne, les
+        // cooptations, les corrections de pointage et le dossier du
+        // personnel interrogeaient sur AWS des tables qui n'existaient
+        // que sur le poste de développement.
+        TABLE_ENTREPRISE: tables.entreprise.tableName,
+        TABLE_COOPTATIONS: tables.cooptations.tableName,
+        TABLE_MESSAGES_INTERNES: tables.messagesInternes.tableName,
+        TABLE_CORRECTIONS: tables.corrections.tableName,
+        TABLE_PIECES_DOSSIER: tables.piecesDossier.tableName,
+        TABLE_SITES: tables.sites.tableName,
+        TABLE_DEMANDES_SITUATION: tables.demandesSituation.tableName,
+
+        // `TABLE_CANDIDATS` n'est volontairement pas déclarée : la
+        // table Candidats a été fusionnée dans Candidatures, comme
+        // l'indique scripts/create-tables.js. C'est `dashboard/stats.js`
+        // qui doit lire TABLE_CANDIDATURES.
 
         DOCUMENTS_BUCKET: compartimentDocuments.bucketName,
 
@@ -142,7 +188,7 @@ export class ApiStack extends Stack {
     // est native : aucune fonction d'autorisation à écrire ni à payer.
     this.api = new HttpApi(this, "ApiHttp", {
       apiName: nommer(etape.nom, "api"),
-      description: `TERRA HR — API applicative (${etape.nom})`,
+      description: `HR UP — API applicative (${etape.nom})`,
       corsPreflight: {
         allowOrigins: etape.originesAutorisees.length > 0
           ? etape.originesAutorisees

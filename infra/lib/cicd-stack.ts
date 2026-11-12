@@ -54,7 +54,7 @@ export class CicdStack extends Stack {
 
     this.roleDeploiement = new Role(this, "RoleDeploiement", {
       roleName: nommer(etape.nom, "github-actions"),
-      description: `Déploiement de TERRA HR depuis GitHub Actions (${etape.nom})`,
+      description: `Déploiement de HR UP depuis GitHub Actions (${etape.nom})`,
       assumedBy: new WebIdentityPrincipal(fournisseur.openIdConnectProviderArn, {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",

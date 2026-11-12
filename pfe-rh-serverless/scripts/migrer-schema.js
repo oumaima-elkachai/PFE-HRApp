@@ -37,6 +37,7 @@ const TABLES_AWS = {
   Entretiens: "entretiens",
   Notifications: "notifications",
   Evenements: "evenements",
+  ProfilsCandidats: "profils-candidats",
 };
 
 const CIBLE_AWS = process.argv.includes("--aws");
@@ -49,7 +50,7 @@ const DOSSIER = path.join(process.cwd(), "sauvegarde");
 // Tables lues à la sauvegarde (y compris celles qui vont disparaître)
 const A_SAUVEGARDER = [
   "Users", "Employes", "Candidats", "Candidatures", "Pointages",
-  "Conges", "Factures", "Offres", "Quiz", "Notifications", "Evenements",
+  "Conges", "Factures", "Offres", "Quiz", "Notifications", "Evenements", "ProfilsCandidats",
 ];
 
 const avertissements = [];
