@@ -242,6 +242,34 @@ describe("Calcul d'un bulletin", () => {
     expect(avec.cotisations.cnss).toBeGreaterThan(sans.cotisations.cnss);
     expect(avec.cotisations.irpp).toBeGreaterThan(sans.cotisations.irpp);
   });
+
+  // Ces deux tests vivaient dans « Invariants », où `base` n'est pas
+  // visible : ils plantaient sur un ReferenceError avant d'atteindre la
+  // moindre assertion. Leur place est ici, aux côtés du test des primes
+  // — c'est la même règle vue des deux bords : ce qui entre dans
+  // l'assiette, et ce qui n'y entre pas.
+
+  test("un remboursement de frais n'est ni cotisé ni imposé", () => {
+    const sans = calculerBulletin(base);
+    const avec = calculerBulletin({ ...base, remboursementsFrais: 300 });
+
+    // Un remboursement n'est pas une rémunération : il ne touche ni
+    // l'assiette CNSS, ni le revenu imposable.
+    expect(avec.brut).toBe(sans.brut);
+    expect(avec.cotisations.total).toBe(sans.cotisations.total);
+    expect(avec.netImposable).toBe(sans.netImposable);
+
+    // Seul le net à payer augmente, du montant exact
+    expect(avec.net).toBeCloseTo(sans.net + 300, 2);
+  });
+
+  test("une prime, elle, est cotisée et imposée", () => {
+    const sans = calculerBulletin(base);
+    const avec = calculerBulletin({ ...base, primes: 300 });
+
+    expect(avec.brut).toBeGreaterThan(sans.brut);
+    expect(avec.cotisations.total).toBeGreaterThan(sans.cotisations.total);
+  });
 });
 
 // ── Cohérence d'ensemble ───────────────────────────────────────────
@@ -266,27 +294,5 @@ describe("Invariants", () => {
       expect(b.fiscal.tauxMoyen).toBeGreaterThanOrEqual(0);
       expect(b.fiscal.tauxMoyen).toBeLessThan(45);
     }
-  });
-
-
-    test("un remboursement de frais n'est ni cotisé ni imposé", () => {
-    const sans = calculerBulletin(base);
-    const avec = calculerBulletin({ ...base, remboursementsFrais: 300 });
-
-    // Le brut, les cotisations et l'impôt sont identiques
-    expect(avec.brut).toBe(sans.brut);
-    expect(avec.cotisations.total).toBe(sans.cotisations.total);
-    expect(avec.netImposable).toBe(sans.netImposable);
-
-    // Seul le net à payer augmente, du montant exact
-    expect(avec.net).toBeCloseTo(sans.net + 300, 2);
-  });
-
-  test("une prime, elle, est cotisée et imposée", () => {
-    const sans = calculerBulletin(base);
-    const avec = calculerBulletin({ ...base, primes: 300 });
-
-    expect(avec.brut).toBeGreaterThan(sans.brut);
-    expect(avec.cotisations.total).toBeGreaterThan(sans.cotisations.total);
   });
 });
