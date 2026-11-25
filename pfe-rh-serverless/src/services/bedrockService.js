@@ -3,9 +3,7 @@ const { BedrockRuntimeClient, InvokeModelCommand } = require("@aws-sdk/client-be
 
 // Client Bedrock — utilise les credentials AWS configurés
 const bedrock = new BedrockRuntimeClient({
-  region: "us-east-1", // Bedrock disponible en us-east-1
-  // En local → utilise vos credentials AWS (~/.aws/credentials)
-  // En Lambda → utilise le rôle IAM automatiquement
+  region: process.env.REGION_BEDROCK || process.env.AWS_REGION || "eu-west-3",
 });
 
 const MODEL_ID = process.env.MODELE_BEDROCK
