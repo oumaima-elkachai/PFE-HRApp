@@ -1,5 +1,4 @@
-const { BedrockRuntimeClient, InvokeModelCommand } = require("@aws-sdk/client-bedrock-runtime");
-
+const { BedrockRuntimeClient, ConverseCommand } = require("@aws-sdk/client-bedrock-runtime");
 
 // Client Bedrock — utilise les credentials AWS configurés
 const bedrock = new BedrockRuntimeClient({
@@ -7,37 +6,30 @@ const bedrock = new BedrockRuntimeClient({
 });
 
 const MODEL_ID = process.env.MODELE_BEDROCK
-  || "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
+  || "eu.amazon.nova-lite-v1:0";
 
 /**
- * Appeler Claude via Bedrock
+ * Appeler le modèle via l'API Converse de Bedrock.
+ *
+ * Converse expose le même contrat à tous les fournisseurs présents sur
+ * Bedrock — Amazon Nova, Anthropic, Mistral, Meta. Le service ne dépend
+ * donc plus du format propriétaire d'un modèle : changer de modèle se
+ * fait par la variable MODELE_BEDROCK, sans toucher au code.
  */
-async function callClaude(prompt, maxTokens = 1000) {
-  const body = JSON.stringify({
-    anthropic_version: "bedrock-2023-05-31",
-    max_tokens: maxTokens,
-    messages: [
-      { role: "user", content: prompt }
-    ],
-  });
-
-  const command = new InvokeModelCommand({
+async function appelerModele(prompt, maxTokens = 1000) {
+  const command = new ConverseCommand({
     modelId: MODEL_ID,
-    contentType: "application/json",
-    accept: "application/json",
-    body: Buffer.from(body),
+    messages: [{ role: "user", content: [{ text: prompt }] }],
+    inferenceConfig: { maxTokens, temperature: 0.2 },
   });
 
   const response = await bedrock.send(command);
-  const result   = JSON.parse(Buffer.from(response.body).toString());
-  return result.content[0].text;
+  return response.output.message.content[0].text;
 }
 
 /**
  * Extraire le texte d'un CV (PDF ou DOCX)
  */
-const mammoth = require("mammoth");
-
 async function extraireTexteCV(fileBuffer, mimetype) {
   if (!fileBuffer || fileBuffer.length === 0) return "";
 
@@ -153,7 +145,7 @@ Réponds uniquement par ce JSON, sans texte autour :
 }`;
 
   try {
-    const reponseBrute = await callClaude(prompt, 800);
+    const reponseBrute = await appelerModele(prompt, 800);
 
     // Le modèle peut encadrer le JSON de texte : on isole l'objet.
     const correspondance = reponseBrute.match(/\{[\s\S]*\}/);
@@ -215,6 +207,7 @@ Génère exactement ${nbQuestions} questions variées:
 - ${Math.ceil(nbQuestions * 0.6)} QCM avec 4 options (indique la bonne réponse)
 - ${Math.floor(nbQuestions * 0.4)} questions ouvertes (type TEXTE)
 
+
 Les questions doivent être SPÉCIFIQUES au poste et aux compétences requises.
 
 Réponds UNIQUEMENT avec ce JSON:
@@ -244,7 +237,7 @@ Réponds UNIQUEMENT avec ce JSON:
 }`;
 
   try {
-    const rawResponse = await callClaude(prompt, 2000);
+    const rawResponse = await appelerModele(prompt, 2000);
     const jsonMatch   = rawResponse.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("Réponse IA invalide");
 
@@ -352,7 +345,7 @@ Réponds uniquement par ce JSON, sans texte autour :
 }`;
 
   try {
-    const brut = await callClaude(prompt, 1500);
+    const brut = await appelerModele(prompt, 1500);
     const correspondance = brut.match(/\{[\s\S]*\}/);
     if (!correspondance) throw new Error("Réponse du modèle non exploitable");
 
