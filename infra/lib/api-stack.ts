@@ -168,7 +168,10 @@ export class ApiStack extends Stack {
     // Analyse des CV et génération des quiz
     this.fonction.addToRolePolicy(new PolicyStatement({
       actions: ["bedrock:InvokeModel"],
-      resources: [`arn:aws:bedrock:${etape.regionBedrock}::foundation-model/*`],
+      resources: [
+  `arn:aws:bedrock:${etape.regionBedrock}:${this.account}:inference-profile/*`,
+  "arn:aws:bedrock:*::foundation-model/*",
+],
     }));
 
     // Administration des comptes depuis l'application

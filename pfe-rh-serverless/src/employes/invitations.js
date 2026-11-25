@@ -75,7 +75,11 @@ const entreprise = require("../factures/entreprise");
 const adresse = require("../utils/adresse");
 
 const TABLE_EMPLOYES = process.env.TABLE_EMPLOYES || "Employes-local";
-const POOL = process.env.COGNITO_USER_POOL_ID;
+// Le CDK fournit COGNITO_POOL_ID (api-stack.ts), ce fichier lisait
+// COGNITO_USER_POOL_ID : deux noms pour la même chose, et l'invitation
+// échouait en 503 sans que rien d'autre ne tombe. On accepte les deux,
+// pour que le code ne dépende plus du nom choisi côté infrastructure.
+const POOL = process.env.COGNITO_POOL_ID ?? process.env.COGNITO_USER_POOL_ID;
 const REGION = process.env.AWS_REGION || "eu-west-3";
 
 /** Expéditeur SES. Absent → aucun envoi, les accès sont seulement affichés. */
