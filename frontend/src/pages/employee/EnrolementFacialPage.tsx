@@ -308,23 +308,45 @@ function PanneauNotice({
   /** Version en vigueur, telle que le serveur la déclare. */
   version: string;
 }) {
-  const zone = useRef<HTMLDivElement>(null);
+  const fin = useRef<HTMLDivElement>(null);
 
-  // La notice doit avoir défilé jusqu'au bout pour que la case
+  // La notice doit avoir été parcourue jusqu'au bout pour que la case
   // s'active. Un consentement donné sans avoir vu ce qu'on accepte
   // n'est pas éclairé — et c'est la première chose qu'un jury
   // interroge.
-  const surDefilement = () => {
-    const el = zone.current;
-    if (!el) return;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 24) surNoticeLue();
-  };
-
-  // Une notice plus courte que la zone n'engendre aucun défilement :
-  // sans ce contrôle, la case resterait bloquée sur grand écran.
+  //
+  // ── Pourquoi un observateur et non le défilement ──────────────────
+  //
+  // La notice tenait dans une zone de 320 pixels qui défilait, et le
+  // verrou lisait sa position de défilement. Mettre le texte à plat
+  // dans la page supprime cette zone — et avec elle la seule preuve
+  // que la notice avait été parcourue : la case se serait activée
+  // d'emblée.
+  //
+  // Un repère placé après le dernier article, observé par
+  // IntersectionObserver, rend la même preuve sans barre de
+  // défilement : la case s'active quand la fin de la notice entre
+  // réellement dans la fenêtre, que l'on ait fait défiler la page ou
+  // qu'un grand écran l'affiche entière.
+  //
+  // Limite assumée, la même qu'avant : avoir la fin sous les yeux
+  // n'est pas l'avoir lue. Aucune interface ne peut prouver une
+  // lecture ; elle peut seulement refuser un accord donné sans que le
+  // texte ait jamais été affiché.
   useEffect(() => {
-    const el = zone.current;
-    if (el && el.scrollHeight <= el.clientHeight + 24) surNoticeLue();
+    const el = fin.current;
+    if (!el) return;
+
+    // Navigateur sans IntersectionObserver : on n'enferme personne
+    // dehors, le verrou se relâche plutôt que de bloquer l'accord.
+    if (typeof IntersectionObserver === 'undefined') { surNoticeLue(); return; }
+
+    const obs = new IntersectionObserver(
+      ([e]) => { if (e.isIntersecting) { surNoticeLue(); obs.disconnect(); } },
+      { threshold: 0.01 },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
   }, [surNoticeLue]);
 
   return (
@@ -342,11 +364,15 @@ function PanneauNotice({
           </span>
         </div>
 
-        <div
-          ref={zone}
-          onScroll={surDefilement}
-          className="px-5 sm:px-6 py-5 max-h-80 overflow-y-auto text-sm text-stone-600 space-y-4 leading-relaxed max-w-3xl"
-        >
+        {/* Toute la notice à plat, sans zone qui défile.
+            Deux colonnes à partir de « lg » : en une seule, les huit
+            articles donnent une page de plus de deux mètres à l'écran,
+            et la case d'accord se retrouve si loin du texte qu'elle
+            n'est plus lue avec lui. Les colonnes CSS se remplissent
+            de haut en bas, donc l'ordre de lecture est conservé.
+            Pour revenir à une colonne unique, retirer ici
+            « lg:columns-2 lg:gap-x-10 ». */}
+        <div className="px-5 sm:px-6 py-5 text-sm text-stone-600 leading-relaxed lg:columns-2 lg:gap-x-10">
           <Article titre="Ce qui est enregistré">
             Un <strong>gabarit numérique</strong> : une suite de 128 nombres
             calculée à partir de votre visage. Ce n'est pas une
@@ -416,11 +442,17 @@ function PanneauNotice({
             anodin. C'est pourquoi l'alternative existe, est équivalente, et
             n'est pas tracée.
           </Article>
+
+          {/* Repère de fin : son entrée dans la fenêtre vaut parcours
+              de la notice. Un pixel de haut, invisible, mais il doit
+              rester dans le flux — « hidden » ou « h-0 » ne sont
+              jamais signalés comme visibles par l'observateur. */}
+          <div ref={fin} aria-hidden="true" className="h-px" />
         </div>
 
         {!noticeLue && (
           <div className="px-5 sm:px-6 py-2.5 bg-stone-50 border-t border-stone-100 text-[11px] text-stone-400 text-center">
-            Faites défiler jusqu'au bout pour pouvoir donner votre accord.
+            Parcourez la notice jusqu'au bout pour pouvoir donner votre accord.
           </div>
         )}
       </section>
@@ -473,8 +505,12 @@ function PanneauNotice({
 }
 
 function Article({ titre, children }: { titre: string; children: React.ReactNode }) {
+  // « break-inside-avoid » garde chaque article d'un seul tenant : sans
+  // lui, un titre finit en bas d'une colonne et son texte repart en
+  // haut de l'autre. « mb-4 » remplace l'ancien « space-y-4 » du
+  // parent, que les colonnes CSS n'appliquent plus entre les blocs.
   return (
-    <div>
+    <div className="break-inside-avoid mb-4">
       <h3 className="text-xs font-bold uppercase tracking-wider text-stone-400 mb-1.5">
         {titre}
       </h3>
@@ -737,7 +773,7 @@ function PanneauPrises({
       <div className="p-5 sm:p-6">
         {/* Cadre vidéo. Le miroir rend le cadrage intuitif : sans lui,
             se recentrer demande d'inverser mentalement ses gestes. */}
-        <div className="relative mx-auto w-full max-w-sm aspect-[4/3] rounded-xl overflow-hidden bg-stone-900">
+        <div className="relative mx-auto w-full max-w-sm aspect-4/3 rounded-xl overflow-hidden bg-stone-900">
           <video
             ref={video}
             playsInline
@@ -749,7 +785,7 @@ function PanneauPrises({
 
           {/* Repère de cadrage */}
           <div
-            className={`absolute inset-0 m-auto w-[55%] aspect-[3/4] rounded-[50%] border-2 transition-colors ${
+            className={`absolute inset-0 m-auto w-[55%] aspect-3/4 rounded-[50%] border-2 transition-colors ${
               visagePresent ? 'border-white/70' : 'border-white/25'
             }`}
             style={{ marginTop: '8%' }}
@@ -770,7 +806,7 @@ function PanneauPrises({
           )}
 
           {/* Pastilles de progression */}
-          <div className="absolute bottom-3 start-0 end-0 flex justify-center gap-1.5">
+          <div className="absolute bottom-3 inset-s-0 inset-e-0 flex justify-center gap-1.5">
             {Array.from({ length: NB_PRISES }).map((_, i) => (
               <span
                 key={i}

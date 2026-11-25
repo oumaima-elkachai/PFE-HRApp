@@ -478,7 +478,7 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   }, []);
 
   return (
-    <div className="fixed top-6 end-6 z-60">
+    <div className="fixed top-6 inset-e-6 z-60">
       <div
         role="status"
         className="bg-brand-500 text-white rounded-xl px-5 py-3 shadow-lg flex items-center gap-3 min-w-70"
@@ -1259,7 +1259,7 @@ export default function MesCongesPage() {
           </div>
 
           <div className="relative w-64 shrink-0">
-            <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
+            <Search className="absolute inset-s-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
             <input
               value={recherche}
               onChange={(e) => setRecherche(e.target.value)}
@@ -1272,7 +1272,7 @@ export default function MesCongesPage() {
                 type="button"
                 onClick={() => setRecherche('')}
                 aria-label={t('pt.annuler')}
-                className="absolute end-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-md hover:bg-stone-200"
+                className="absolute inset-e-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-md hover:bg-stone-200"
               >
                 <X className="w-3.5 h-3.5 text-stone-400" />
               </button>

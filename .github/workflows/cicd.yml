@@ -184,8 +184,8 @@ jobs:
         with:
           category: '/language:javascript-typescript'
 
-  sonarcloud:
-    name: 1e - Analyse SonarCloud
+  sonarQube:
+    name: 1e - Analyse SonarQube
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

@@ -1,0 +1,13 @@
+{
+  "name": "hrup-verification",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "verifier": "node verifier.mjs",
+    "securite": "node verifier.mjs --filtre SEC",
+    "tout": "node verifier.mjs --tout"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.705.0"
+  }
+}
