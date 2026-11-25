@@ -8,7 +8,8 @@ const bedrock = new BedrockRuntimeClient({
   // En Lambda → utilise le rôle IAM automatiquement
 });
 
-const MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"; // Le moins cher
+const MODEL_ID = process.env.MODELE_BEDROCK
+  || "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 /**
  * Appeler Claude via Bedrock
