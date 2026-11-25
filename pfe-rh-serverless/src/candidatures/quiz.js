@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const { verifyToken } = require('../middleware/auth');
 const { checkRole } = require('../middleware/role');
 const quizService = require('../services/quizService');
-const aiService = require('../services/aiService');
+const bedrockService = require('../services/bedrockService');
 const { calculerScoreTotal } = require('../utils/scoring');
 const { dynamodb } = require('../config/aws');
 
@@ -33,8 +33,8 @@ router.post('/quiz/generer', verifyToken, checkRole('RH'), async (req, res) => {
     const offre = offreResult.Item;
 
     console.log('🤖 Génération du quiz par IA...');
-    const quizGenere = await aiService.genererQuiz(offre);
 
+    const quizGenere = await bedrockService.genererQuizIA(offre, 8);
     const quizId = uuidv4();
     const quiz = {
       id: quizId,
